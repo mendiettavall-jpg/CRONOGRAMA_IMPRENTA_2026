@@ -1,22 +1,52 @@
-// ─────────────────────────────────────────────────────────────
+// ================================
+// CONEXIÓN A SUPABASE
+// ================================
+const SUPABASE_URL = "https://xtyichijbrutbdgfcalz.supabase.co";
+const SUPABASE_KEY = "sb_publishable_kEmKQ-plQH4fVtTULYF-cg_ZDe-1rVM";
+
+let supabaseClient = null;
+if (window.supabase) {
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+} else {
+  console.warn("La librería de Supabase no se cargó correctamente.");
+}
+
+// ================================
+// PRUEBA DE CONEXIÓN
+// ================================
+async function probarConexionBT() {
+  const { data, error } = await supabaseClient
+    .from("bt_imprenta")
+    .select("*")
+    .limit(10);
+
+  if (error) {
+    console.error("ERROR AL LEER bt_imprenta:", error);
+    return;
+  }
+
+  console.log("DATOS bt_imprenta:", data);
+}
+
+// probarConexionBT();// ─────────────────────────────────────────────────────────────
 //  DATA STORE
 // ─────────────────────────────────────────────────────────────
 const DATA = {
-  btImprenta:   { headers: [], rows: [] },
-  noBarnizado:  { headers: [], rows: [] },
+  btImprenta: { headers: [], rows: [] },
+  noBarnizado: { headers: [], rows: [] },
   noTroquelado: { headers: ['COD IFA', 'ITEM'], rows: [] },
-  noPegado:     { headers: [], rows: [] },
+  noPegado: { headers: [], rows: [] },
 };
 
 // ─────────────────────────────────────────────────────────────
 //  SCHEDULE CONSTANTS
 // ─────────────────────────────────────────────────────────────
 const STAGES = [
-  { id: 'cortado',    label: 'CORTADO',    color: '#9f1239', machines: ['GUILLOTINA'] },
-  { id: 'impresion',  label: 'IMPRESIÓN',  color: '#1e3a8a', machines: ['MOZP', 'SPEEDMASTER', 'GTO-52'] },
-  { id: 'barnizado',  label: 'BARNIZADO',  color: '#14532d', machines: ['KORD 2', 'KORD 3'] },
+  { id: 'cortado', label: 'CORTADO', color: '#9f1239', machines: ['GUILLOTINA'] },
+  { id: 'impresion', label: 'IMPRESIÓN', color: '#1e3a8a', machines: ['MOZP', 'SPEEDMASTER', 'GTO-52'] },
+  { id: 'barnizado', label: 'BARNIZADO', color: '#14532d', machines: ['KORD 2', 'KORD 3'] },
   { id: 'troquelado', label: 'TROQUELADO', color: '#4a1d96', machines: ['TROQ 57', 'TROQ 72', 'TROQ 77', 'TROQ MERCEDES'] },
-  { id: 'pegado',     label: 'PEGADO',     color: '#7c2d12', machines: ['PEGADORA'] },
+  { id: 'pegado', label: 'PEGADO', color: '#7c2d12', machines: ['PEGADORA'] },
 ];
 const ALL_MACHINES = STAGES.flatMap(s => s.machines);
 const DAYS = ['LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES'];
@@ -25,7 +55,7 @@ const DAYS = ['LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES'];
 function buildHourSlots() {
   const slots = [];
   for (let h = 8; h <= 17; h++) {
-    slots.push({ label: `${String(h).padStart(2,'0')}:00`, start: h * 60, end: (h + 1) * 60 });
+    slots.push({ label: `${String(h).padStart(2, '0')}:00`, start: h * 60, end: (h + 1) * 60 });
   }
   slots.push({ label: '17:30', start: 17 * 60 + 30, end: 18 * 60 });
   return slots; // 11 slots total
@@ -39,13 +69,17 @@ const HOUR_SLOTS = buildHourSlots();
 const schedDateRange = { start: '', end: '' };
 
 const schedState = {
-  lunchStart:      '13:00',
-  lunchEnd:        '14:00',
-  lunchEnabled:    false,
-  nightShifts:     [],
+  lunchStart: '13:00',
+  lunchEnd: '14:00',
+  lunchEnabled: false,
+  nightShifts: [],
   configPanelOpen: false,
-  cells:           {},
+  cells: {},
 };
+
+// Módulo Planificación - Lista de RMAs consultados en la sesión
+let rmaSessionList = [];
+
 
 function initScheduleState() {
   ALL_MACHINES.forEach(m => {
@@ -62,23 +96,23 @@ function initScheduleState() {
 // ─────────────────────────────────────────────────────────────
 //  APP STATE
 // ─────────────────────────────────────────────────────────────
-let sidebarCollapsed     = false;
-let activeMenu           = null;
-let activeSubMenu        = null;
-let tablaDropdownOpen    = false;   // ONLY this controls the dropdown
-let scheduleZoom         = 1;
+let sidebarCollapsed = false;
+let activeMenu = null;
+let activeSubMenu = null;
+let tablaDropdownOpen = false;   // ONLY this controls the dropdown
+let scheduleZoom = 1;
 let autocompleteSelected = -1;
 
 // ─────────────────────────────────────────────────────────────
 //  DOM REFS
 // ─────────────────────────────────────────────────────────────
-const sidebar        = document.getElementById('sidebar');
-const sidebarToggle  = document.getElementById('sidebar-toggle');
-const navList        = document.getElementById('nav-list');
-const pageTitle      = document.getElementById('page-title');
-const contentBody    = document.getElementById('content-body');
-const headerActions  = document.getElementById('header-actions');
-const btnExportDots  = document.getElementById('btn-export-dots');
+const sidebar = document.getElementById('sidebar');
+const sidebarToggle = document.getElementById('sidebar-toggle');
+const navList = document.getElementById('nav-list');
+const pageTitle = document.getElementById('page-title');
+const contentBody = document.getElementById('content-body');
+const headerActions = document.getElementById('header-actions');
+const btnExportDots = document.getElementById('btn-export-dots');
 const exportDropdown = document.getElementById('export-dropdown');
 const btnExportExcel = document.getElementById('btn-export-excel');
 const autocompleteEl = document.getElementById('autocomplete-dropdown');
@@ -116,15 +150,36 @@ async function loadEmbeddedOrCSV(path, key) {
 //  INIT
 // ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  // FASE 1: Carga de BT Imprenta desde Supabase
   try {
-    DATA.btImprenta = await loadCSV('Tabla BT Imprenta.csv');
-  } catch {
-    const lookup  = window.BT_LOOKUP || [];
-    const headers = ['CÓDIGO','CÓDIGO DE PLANTA','CÓDIGO DE PLANTA2','MATERIAL','PRODUCTOS','INSUMO','PRESENTACIÓN','TIPO','LÍNEA'];
-    DATA.btImprenta = { headers, rows: lookup.map(item => Object.fromEntries(headers.map((h,i)=>[h,i===0?item.c:i===4?item.p:'']))) };
+    if (supabaseClient) {
+      const { data, error } = await supabaseClient
+        .from('bt_imprenta')
+        .select('*');
+      
+      if (error) throw error;
+      
+      if (data && data.length > 0) {
+        // Obtenemos los encabezados de las llaves del primer objeto
+        const headers = Object.keys(data[0]);
+        DATA.btImprenta = { headers, rows: data };
+        console.log("Fase 1: Datos de BT Imprenta cargados desde Supabase correctamente.");
+      } else {
+        console.warn("La tabla bt_imprenta está vacía en Supabase.");
+      }
+    } else {
+      throw new Error("Supabase Client no está inicializado.");
+    }
+  } catch (err) {
+    console.error("Error al cargar datos de Supabase (bt_imprenta):", err);
+    // Fallback de emergencia usando window.BT_LOOKUP si existe en data.js
+    const lookup = window.BT_LOOKUP || [];
+    const headers = ['CÓDIGO', 'CÓDIGO DE PLANTA', 'CÓDIGO DE PLANTA2', 'MATERIAL', 'PRODUCTOS', 'INSUMO', 'PRESENTACIÓN', 'TIPO', 'LÍNEA'];
+    DATA.btImprenta = { headers, rows: lookup.map(item => Object.fromEntries(headers.map((h, i) => [h, i === 0 ? item.c : i === 4 ? item.p : '']))) };
   }
-  try { DATA.noBarnizado = await loadEmbeddedOrCSV('Tabla No Barnizado.csv','noBarnizado'); } catch { DATA.noBarnizado = { headers:['COD IFA','PRODUCTO (NO SE BARNIZA)'], rows:[] }; }
-  try { DATA.noPegado    = await loadEmbeddedOrCSV('Tabla No Pegado.csv',   'noPegado'   ); } catch { DATA.noPegado    = { headers:['COD IFA','PRODUCTO (NO SE PEGA)'],    rows:[] }; }
+
+  try { DATA.noBarnizado = await loadEmbeddedOrCSV('Tabla No Barnizado.csv', 'noBarnizado'); } catch { DATA.noBarnizado = { headers: ['COD IFA', 'PRODUCTO (NO SE BARNIZA)'], rows: [] }; }
+  try { DATA.noPegado = await loadEmbeddedOrCSV('Tabla No Pegado.csv', 'noPegado'); } catch { DATA.noPegado = { headers: ['COD IFA', 'PRODUCTO (NO SE PEGA)'], rows: [] }; }
   initScheduleState();
   renderNav();
   renderContent();
@@ -141,8 +196,8 @@ function setupKeyboard() {
   document.addEventListener('keydown', e => {
     if (!e.ctrlKey) return;
     if (e.key === '+' || e.key === '=') { e.preventDefault(); changeZoom(+0.1); }
-    if (e.key === '-')                  { e.preventDefault(); changeZoom(-0.1); }
-    if (e.key === '0')                  { e.preventDefault(); changeZoom(0, true); }
+    if (e.key === '-') { e.preventDefault(); changeZoom(-0.1); }
+    if (e.key === '0') { e.preventDefault(); changeZoom(0, true); }
   });
   document.addEventListener('wheel', e => {
     if (!e.ctrlKey) return;
@@ -150,7 +205,7 @@ function setupKeyboard() {
   }, { passive: false });
 }
 function changeZoom(delta, reset = false) {
-  if (!['general','etapa'].includes(activeMenu)) return;
+  if (!['general', 'etapa'].includes(activeMenu)) return;
   scheduleZoom = reset ? 1 : Math.min(2.5, Math.max(0.3, scheduleZoom + delta));
   const c = document.getElementById('schedule-table-container');
   if (c) c.style.transform = `scale(${scheduleZoom})`;
@@ -172,12 +227,13 @@ function renderNav() {
   navList.innerHTML = '';
 
   [
-    { id:'general', title:'Cronograma General',   icon:'uil-calender' },
-    { id:'etapa',   title:'Cronograma por Etapa', icon:'uil-layer-group' },
-    { id:'tiempos', title:'Tiempos',              icon:'uil-clock-three' },
+    { id: 'planificacion', title: 'Planificación', icon: 'uil-file-edit-alt' },
+    { id: 'general', title: 'Cronograma General', icon: 'uil-calender' },
+    { id: 'etapa', title: 'Cronograma por Etapa', icon: 'uil-layer-group' },
+    { id: 'tiempos', title: 'Tiempos', icon: 'uil-clock-three' },
   ].forEach(item => {
     const li = document.createElement('li');
-    li.innerHTML = `<div class="nav-item ${activeMenu===item.id?'active':''}" data-id="${item.id}">
+    li.innerHTML = `<div class="nav-item ${activeMenu === item.id ? 'active' : ''}" data-id="${item.id}">
       <i class="uil ${item.icon}"></i>
       <span class="nav-text">${item.title}</span>
       <span class="nav-tooltip">${item.title}</span>
@@ -212,8 +268,10 @@ function renderContent() {
     contentBody.innerHTML = `<div class="empty-state"><i class="uil uil-apps"></i><h2>Panel Principal</h2><p>Selecciona una opción del menú lateral para continuar.</p></div>`;
     return;
   }
-  if (activeMenu === 'general') { pageTitle.textContent = 'Cronograma General';   return renderCronogramaGeneral(); }
-  if (activeMenu === 'etapa')   { pageTitle.textContent = 'Cronograma por Etapa'; return renderCronogramaPorEtapa(); }
+  if (activeMenu === 'planificacion') { pageTitle.textContent = ''; return renderPlanificacion(); }
+
+  if (activeMenu === 'general') { pageTitle.textContent = 'Cronograma General'; return renderCronogramaGeneral(); }
+  if (activeMenu === 'etapa') { pageTitle.textContent = 'Cronograma por Etapa'; return renderCronogramaPorEtapa(); }
   if (activeMenu === 'tiempos') {
     pageTitle.textContent = 'Tiempos';
     contentBody.innerHTML = `<div class="empty-state"><i class="uil uil-clock-three"></i><h2>Tiempos</h2><p>Próximamente.</p></div>`;
@@ -221,6 +279,352 @@ function renderContent() {
   }
   contentBody.innerHTML = `<div class="empty-state"><i class="uil uil-construction"></i><h2>En construcción</h2></div>`;
 }
+
+// ─────────────────────────────────────────────────────────────
+//  PLANIFICACIÓN (RMA SEARCH)
+// ─────────────────────────────────────────────────────────────
+function renderPlanificacion() {
+  contentBody.innerHTML = `
+    <div class="plan-container">
+      <div class="plan-main-title">
+        <h1>Planificación</h1>
+      </div>
+      <div class="plan-header">
+        <i class="uil uil-plus-circle"></i>
+        <h2>Añadir RMA</h2>
+      </div>
+
+      <div class="plan-search-box">
+        <div class="search-box">
+          <i class="uil uil-search"></i>
+          <input type="text" id="rma-input" placeholder="Ingrese número de RMA (Enter para buscar)..." maxlength="4" autocomplete="off">
+        </div>
+      </div>
+      
+      <div class="table-wrap" id="rma-list-container" style="background:#fff; border-radius:12px; border:1px solid var(--border-color); overflow:hidden;">
+        ${renderRMATable()}
+      </div>
+    </div>
+  `;
+
+  const input = document.getElementById('rma-input');
+  if (input) {
+    input.focus();
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        const val = input.value.trim();
+        if (!val) return;
+        await buscarRMA(val);
+        input.value = '';
+      }
+    });
+  }
+}
+
+const SPECIAL_COD_IFAS = [
+  'IFA-01508', 'IFA-01468', 'IFA-01504', 'IFA-01527', 'IFA-01372',
+  'IFA-01493', 'IFA-03842', 'IFA-01531', 'IFA-01543', 'IFA-01546'
+];
+
+function renderRMATable() {
+
+  if (rmaSessionList.length === 0) {
+    return `<div class="empty-state" style="padding: 60px 40px;">
+              <i class="uil uil-search"></i>
+              <p>No hay RMAs añadidos aún.</p>
+            </div>`;
+  }
+
+  const rowsHtml = rmaSessionList.map(item => {
+    const isLoaded = item.ciclos !== undefined;
+    return `
+      <tr data-rma="${item.n}">
+        <td class="col-rma">${item.n}</td>
+        <td title="${escH(item.producto)}">${escH(item.producto)}</td>
+        <td title="${escH(item.presentacion_comercial)}">${escH(item.presentacion_comercial)}</td>
+        <td title="${escH(item.material_requerido)}">${escH(item.material_requerido)}</td>
+        <td>${escH(item.codigo_material)}</td>
+        <td class="col-cantidad">${escH(item.cantidad_requerida_para_cubrir)}</td>
+        <td>${item.linea || '-'}</td>
+        <td>${item.n_colores || '-'}</td>
+        <td>
+          <input type="text" class="plan-maquina-input" 
+                 value="${item.maquina || ''}" 
+                 oninput="updateRmaMaquina('${item.n}', this.value, this)"
+                 onblur="cargarDatosTecnicos()"
+                 placeholder="M, S, G..."
+                 onclick="event.stopPropagation()">
+        </td>
+
+        ${isLoaded ? `
+          <td>${item.n_troquel || '-'}</td>
+          <td>${item.un_tiraje || '-'}</td>
+          <td>${item.ciclos}</td>
+          <td class="col-tirajes">${item.tirajes}</td>
+        ` : ''}
+      </tr>
+    `;
+  }).join('');
+
+  // Calcular Totales
+  const totalCantidad = rmaSessionList.reduce((acc, i) => acc + (parseFloat(i.cantidad_requerida_para_cubrir) || 0), 0);
+  const totalTirajes = rmaSessionList.reduce((acc, i) => acc + (parseFloat(i.tirajes) || 0), 0);
+
+  return `
+    <div class="table-scroll">
+
+      <table class="data-table plan-table-mini">
+        <thead>
+          <tr>
+            <th>RMA</th>
+            <th>PRODUCTO</th>
+            <th>PRESENTACIÓN</th>
+            <th>MATERIAL</th>
+            <th>COD-IFA</th>
+            <th>CANTIDAD</th>
+            <th>LINEA</th>
+            <th>N° COLORES</th>
+            <th>MAQUINA</th>
+            ${rmaSessionList.some(i => i.ciclos !== undefined) ? `
+              <th>N° TROQUEL</th>
+              <th>UN/TIRAJE</th>
+              <th>CICLOS</th>
+              <th>TIRAJES</th>
+            ` : ''}
+          </tr>
+        </thead>
+
+
+        <tbody id="plan-table-body">
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>
+    <div class="table-footer plan-footer-combined">
+      <div class="footer-left">
+        <span>${rmaSessionList.length} registro(s) en planificación</span>
+      </div>
+      <div class="plan-summary-bar-inline">
+        <div class="summary-item">
+          <span class="summary-label">Total Cantidad:</span>
+          <span class="summary-value">${totalCantidad.toLocaleString()}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Total Tirajes:</span>
+          <span class="summary-value">${totalTirajes.toLocaleString()}</span>
+        </div>
+      </div>
+      <div class="footer-right">
+        <button class="btn-cargar-datos" onclick="cargarDatosTecnicos()">
+          <i class="uil uil-sync"></i> CARGAR
+        </button>
+      </div>
+    </div>
+  `;
+
+}
+
+// Helper para normalizar comparaciones entre tablas (RMA vs BT Imprenta)
+const normCol = (val) => String(val || "").trim().toUpperCase();
+// Helper específico para máquinas (ignora guiones y espacios)
+const normMaq = (val) => normCol(val).replace(/-/g, "").replace(/\s+/g, "");
+
+function updateRmaMaquina(rmaN, val, inputEl) {
+
+  const item = rmaSessionList.find(i => normCol(i.n) === normCol(rmaN));
+  if (item) {
+    const v = val.trim().toLowerCase();
+    let finalVal = val;
+
+    if (v === 'm') finalVal = 'MOZP';
+    else if (v === 's') finalVal = 'SPEEDMASTER';
+    else if (v === 'g') finalVal = 'GTO-52';
+
+    item.maquina = finalVal;
+    if (inputEl && inputEl.value !== finalVal) {
+      inputEl.value = finalVal;
+    }
+  }
+}
+
+
+async function cargarDatosTecnicos() {
+  if (rmaSessionList.length === 0) return;
+  
+  if (!supabaseClient) {
+    showSaveToast("Error: Sin conexión a Supabase");
+    return;
+  }
+
+  const codigos = [...new Set(rmaSessionList.map(item => item.codigo_material))].filter(Boolean);
+  if (codigos.length === 0) return;
+
+  showSaveToast("Calculando datos técnicos...");
+
+  try {
+    const { data, error } = await supabaseClient
+
+      .from('bt_imprenta')
+      .select('codigo, n_troquel, cajas_por_tiraje, tirajes_por_pliego, maquina_preferencial')
+      .in('codigo', codigos);
+
+    if (error) throw error;
+
+    // console.log("[DEBUG-PLANIFICACION] Respuesta de BT Imprenta:", data);
+
+    rmaSessionList.forEach(item => {
+      const searchKey = normCol(item.codigo_material);
+      const isSpecial = SPECIAL_COD_IFAS.map(c => normCol(c)).includes(searchKey);
+      
+      let btData = null;
+
+      if (isSpecial) {
+        const userMaq = normMaq(item.maquina);
+        // console.log(`[DEBUG-PLANIFICACION] Caso Especial Detectado: ${searchKey}`);
+        
+        if (!userMaq) {
+          // console.log(`[DEBUG-PLANIFICACION] Omitiendo match especial para ${searchKey} porque MAQUINA está vacía.`);
+        } else {
+          // Double match: Codigo + Maquina Preferencial (Normalización robusta de máquina)
+          btData = data ? data.find(row => 
+            normCol(row.codigo) === searchKey && 
+            normMaq(row.maquina_preferencial) === userMaq
+          ) : null;
+          
+          // console.log(`[DEBUG-PLANIFICACION] Buscando Match Especial (UserMaq: ${userMaq}):`, btData ? "SÍ" : "NO");
+        }
+      } else {
+
+        // Lógica Normal: Primer match por código
+        btData = data ? data.find(row => normCol(row.codigo) === searchKey) : null;
+      }
+      
+      // Datos Base de BT
+      item.n_troquel = btData?.n_troquel || '-';
+      item.un_tiraje = btData?.cajas_por_tiraje || '-';
+      
+      const tirajesPliego = parseFloat(btData?.tirajes_por_pliego);
+
+
+      // 1. CÁLCULO DE CICLOS
+      const nColoresRaw = item.n_colores;
+      const nColores = parseFloat(nColoresRaw);
+      
+      if (!isNaN(nColores) && item.maquina) {
+        const maq = (item.maquina || '').toUpperCase();
+        let divisor = 2; // Default for SPEEDMASTER/MOZP
+        if (maq === 'GTO-52') divisor = 4;
+
+        let ciclos = Math.ceil(nColores / divisor);
+
+        // Validación robusta de SOBRES
+        const mat = (item.material_requerido || '').trim().toUpperCase();
+        if (mat === 'SOBRE' || mat === 'SOBRES') {
+          ciclos += 1;
+        }
+        item.ciclos = ciclos;
+
+        // console.log(`[DEBUG-PLANIFICACION] Calculando Ciclos para RMA ${item.n}: C:${nColores} / D:${divisor} + S:${mat.includes('SOBRE')} = ${ciclos}`);
+      } else {
+        item.ciclos = '-';
+      }
+
+      // 2. CÁLCULO DE TIRAJES (+10% margen de seguridad)
+      const cantidad = parseFloat(item.cantidad_requerida_para_cubrir);
+      if (!isNaN(cantidad) && !isNaN(tirajesPliego) && tirajesPliego > 0) {
+        const tirajeBase = cantidad / tirajesPliego;
+        const tirajeFinal = Math.ceil(tirajeBase * 1.10);
+        item.tirajes = tirajeFinal;
+
+        // console.log(`[DEBUG-PLANIFICACION] Tirajes para ${item.n}: Base=${tirajeBase.toFixed(2)}, Final(+10%)=${tirajeFinal}`);
+      } else {
+        item.tirajes = '-';
+      }
+    });
+
+
+
+    const container = document.getElementById('rma-list-container');
+    if (container) container.innerHTML = renderRMATable();
+    showSaveToast("Cálculos completados");
+  } catch (err) {
+    console.error("Error en carga técnica v4:", err);
+    showSaveToast("Error al procesar cálculos técnicos");
+  }
+}
+
+
+async function buscarRMA(n) {
+  // Validar duplicados
+  if (rmaSessionList.some(item => String(item.n) === String(n))) {
+    showSaveToast("El RMA #" + n + " ya está en la lista");
+    return;
+  }
+
+  if (!supabaseClient) {
+    console.error("Supabase client no inicializado");
+    showSaveToast("Error: Sin conexión");
+    return;
+  }
+
+  try {
+    const { data, error } = await supabaseClient
+      .from('rma')
+      .select('n, producto, presentacion_comercial, material_requerido, codigo_material, cantidad_requerida_para_cubrir')
+      .eq('n', n)
+      .limit(1);
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      showSaveToast("RMA #" + n + " no encontrado");
+      return;
+    }
+
+    if (data && data.length > 0) {
+      const rmaItem = data[0];
+      const searchKey = normCol(rmaItem.codigo_material);
+
+      // [DEBUG-PLANIFICACION] Buscando match inicial para: [${searchKey}]
+      // console.log(`[DEBUG-PLANIFICACION] Buscando match en memoria para: ${searchKey}`);
+
+      // 2. Buscar datos técnicos iniciales en BT Imprenta
+      // Usamos una consulta robusta y filtramos en JS para coincidir con la lógica del Batch
+      const { data: btRows, error: btError } = await supabaseClient
+        .from('bt_imprenta')
+        .select('codigo, linea, cantidad_de_colores')
+        .eq('codigo', rmaItem.codigo_material.trim());
+      
+      const btMatch = btRows ? btRows.find(r => normCol(r.codigo) === searchKey) : null;
+      
+      if (!btError && btMatch) {
+        // console.log("[DEBUG-PLANIFICACION] Match inicial encontrado: SÍ", btMatch);
+        rmaItem.linea = btMatch.linea || '-';
+        rmaItem.n_colores = btMatch.cantidad_de_colores || '-';
+      } else {
+        // console.log("[DEBUG-PLANIFICACION] Match inicial encontrado: NO");
+        // if (btError) console.error("[DEBUG-PLANIFICACION] Error query:", btError);
+        rmaItem.linea = '-';
+        rmaItem.n_colores = '-';
+      }
+
+
+
+      // 3. Inicializar campos de carga posterior (vacíos)
+      rmaItem.maquina = '';
+      // ciclos, tirajes, etc. se mantienen undefined hasta presionar CARGAR
+
+      rmaSessionList.unshift(rmaItem);
+      const container = document.getElementById('rma-list-container');
+      if (container) container.innerHTML = renderRMATable();
+    }
+
+  } catch (err) {
+    console.error("Error al buscar RMA:", err);
+    showSaveToast("Error al consultar Supabase");
+  }
+}
+
 
 // ─────────────────────────────────────────────────────────────
 //  DATE BAR (shared across General & Etapa)
@@ -259,9 +663,9 @@ function wireDateBar(viewId, exportFn) {
   const ds = document.getElementById(`sched-date-start-${viewId}`);
   const de = document.getElementById(`sched-date-end-${viewId}`);
   if (ds) ds.addEventListener('change', () => { schedDateRange.start = ds.value; });
-  if (de) de.addEventListener('change', () => { schedDateRange.end   = de.value; });
+  if (de) de.addEventListener('change', () => { schedDateRange.end = de.value; });
   const btn = document.getElementById(`sched-export-btn-${viewId}`);
-  const dd  = document.getElementById(`sched-export-dd-${viewId}`);
+  const dd = document.getElementById(`sched-export-dd-${viewId}`);
   if (btn && dd) {
     btn.addEventListener('click', e => { e.stopPropagation(); dd.classList.toggle('open'); });
     document.addEventListener('click', () => dd?.classList.remove('open'), { once: false });
@@ -271,7 +675,7 @@ function wireDateBar(viewId, exportFn) {
 }
 
 function wireFullscreenBtn() {
-  const btn  = document.getElementById('sched-fullscreen-btn');
+  const btn = document.getElementById('sched-fullscreen-btn');
   const icon = document.getElementById('sched-fullscreen-icon');
   if (!btn || !icon) return;
 
@@ -290,12 +694,12 @@ function wireFullscreenBtn() {
     }
   });
 
-  document.addEventListener('fullscreenchange',       updateIcon);
+  document.addEventListener('fullscreenchange', updateIcon);
   document.addEventListener('webkitfullscreenchange', updateIcon);
 }
 
 function zoomBadgeHTML() {
-  return `<div class="zoom-badge"><i class="uil uil-search-plus"></i><span id="zoom-badge-pct">${Math.round(scheduleZoom*100)}%</span></div>`;
+  return `<div class="zoom-badge"><i class="uil uil-search-plus"></i><span id="zoom-badge-pct">${Math.round(scheduleZoom * 100)}%</span></div>`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -340,7 +744,7 @@ function renderCronogramaGeneral() {
       writing-mode:vertical-rl; transform:rotate(180deg);
       text-align:center; padding:12px 8px; height:100px;
       border-right:2px solid rgba(255,255,255,.2);
-      ${!isLast?'border-bottom:1px solid rgba(255,255,255,.1);':''}
+      ${!isLast ? 'border-bottom:1px solid rgba(255,255,255,.1);' : ''}
       position:sticky; left:0; z-index:5;
       box-shadow:2px 0 6px rgba(0,0,0,.08);
     ">${day}</td>`;
@@ -349,7 +753,7 @@ function renderCronogramaGeneral() {
       cells += `<td class="sched-cell gen-cell"
         data-day="${di}" data-stageidx="${si}"
         title="${day} · ${s.label}"
-        style="min-width:160px;height:100px;border-left:2px solid #f0f0f0;${!isLast?'border-bottom:1px solid var(--border-color);':''}vertical-align:middle;text-align:center;background:#fff;">
+        style="min-width:160px;height:100px;border-left:2px solid #f0f0f0;${!isLast ? 'border-bottom:1px solid var(--border-color);' : ''}vertical-align:middle;text-align:center;background:#fff;">
       </td>`;
     });
     bodyHTML += `<tr>${cells}</tr>`;
@@ -377,7 +781,7 @@ function renderCronogramaGeneral() {
   contentBody.querySelectorAll('.gen-cell').forEach(cell => {
     cell.addEventListener('click', () => {
       const si = +cell.dataset.stageidx;
-      const s  = STAGES[si];
+      const s = STAGES[si];
       cell._on = !cell._on;
       cell.style.background = cell._on ? '#fff1f2' : '#fff';
       cell.innerHTML = cell._on ? `<span class="sched-chip" style="background:${s.color};">✓</span>` : '';
@@ -390,9 +794,9 @@ function renderCronogramaGeneral() {
 
 function exportCronogramaGeneral() {
   const startLbl = schedDateRange.start || '—';
-  const endLbl   = schedDateRange.end   || '—';
+  const endLbl = schedDateRange.end || '—';
   let csv = `\uFEFFCronograma General (${startLbl} → ${endLbl})\r\n`;
-  csv += 'DÍA;' + STAGES.map(s=>s.label).join(';') + '\r\n';
+  csv += 'DÍA;' + STAGES.map(s => s.label).join(';') + '\r\n';
   document.querySelectorAll('#schedule-table-container tbody tr').forEach((tr, di) => {
     const row = [DAYS[di]];
     tr.querySelectorAll('td:not(:first-child)').forEach(td => {
@@ -416,16 +820,16 @@ function renderCronogramaPorEtapa() {
   scheduleZoom = 1;
   const SLEN = HOUR_SLOTS.length; // 11
 
-  const DAY_W  = 46;   // day label column px
+  const DAY_W = 46;   // day label column px
   const HOUR_W = 68;   // hour label column px
   const CELL_W = 90;   // machine cell width px (wider for readability)
-  const HR1_H  = 38;   // stage group header row height px
-  const HR2_H  = 52;   // machine name header height px (horizontal text)
+  const HR1_H = 38;   // stage group header row height px
+  const HR2_H = 52;   // machine name header height px (horizontal text)
 
   // ── HEADER ROW 1: corner (colspan=2) + stage groups ──
   let hr1 = `<th colspan="2" class="sched-corner" style="
     background:#c81e33;
-    width:${HOUR_W+DAY_W}px; min-width:${HOUR_W+DAY_W}px;
+    width:${HOUR_W + DAY_W}px; min-width:${HOUR_W + DAY_W}px;
     height:${HR1_H}px;
     top:0; z-index:16;
     color:rgba(255,255,255,.7);
@@ -469,7 +873,7 @@ function renderCronogramaPorEtapa() {
   STAGES.forEach(stage => {
     stage.machines.forEach((machine, mi) => {
       const isFirst = mi === 0;
-       hr2 += `<th class="sched-th-machine" data-machine-key="${machine}" style="
+      hr2 += `<th class="sched-th-machine" data-machine-key="${machine}" style="
         background:#7f1d1d;
         top:${HR1_H}px;
         width:${CELL_W}px; min-width:${CELL_W}px;
@@ -492,7 +896,7 @@ function renderCronogramaPorEtapa() {
 
     HOUR_SLOTS.forEach((slot, si) => {
       const isFirstSlot = si === 0;
-      const isLastSlot  = si === SLEN - 1;
+      const isLastSlot = si === SLEN - 1;
 
       // Hour label cell — col 0, always present, sticky left:0
       const hourCell = `<td class="sched-td-hour" style="
@@ -525,12 +929,12 @@ function renderCronogramaPorEtapa() {
           else if (state === 'night') { bg = '#f5f3ff'; }
           else if (state === 'work') { inner = `<span class="sched-chip" style="background:${stage.color};">✓</span>`; bg = '#fff1f2'; }
 
-          const cellId = `c__${machine.replace(/[^a-zA-Z0-9]/g,'_')}__${di}__${si}`;
-          machineCells += `<td class="sched-cell${state==='lunch'?' lunch-cell':''}${state==='night'?' night-cell':''}"
+          const cellId = `c__${machine.replace(/[^a-zA-Z0-9]/g, '_')}__${di}__${si}`;
+          machineCells += `<td class="sched-cell${state === 'lunch' ? ' lunch-cell' : ''}${state === 'night' ? ' night-cell' : ''}"
             id="${cellId}" data-machine="${escH(machine)}" data-day="${di}" data-slot="${si}"
             style="width:${CELL_W}px;min-width:${CELL_W}px;background:${bg};${cursor}
-              border-bottom:${isLastSlot&&!isLastDay?'3px solid rgba(185,28,44,.2)':'1px solid var(--border-color)'};
-              ${isFirstOfStage?'border-left:2px solid rgba(0,0,0,.1);':'border-left:1px solid rgba(0,0,0,.05);'}
+              border-bottom:${isLastSlot && !isLastDay ? '3px solid rgba(185,28,44,.2)' : '1px solid var(--border-color)'};
+              ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
             ">${inner}</td>`;
         });
       });
@@ -547,13 +951,13 @@ function renderCronogramaPorEtapa() {
 
   // ── CONFIG PANEL ──
   const machOpts = ALL_MACHINES.map(m => `<option value="${m}">${m}</option>`).join('');
-  const cenaVis  = schedState.nightShifts.length > 0;
+  const cenaVis = schedState.nightShifts.length > 0;
 
   const cfgPanel = `
     <div class="config-panel-toggle" id="config-panel-toggle" title="Panel de configuración">
-      <i class="uil ${schedState.configPanelOpen?'uil-angle-right':'uil-angle-left'}" id="cfg-toggle-icon"></i>
+      <i class="uil ${schedState.configPanelOpen ? 'uil-angle-right' : 'uil-angle-left'}" id="cfg-toggle-icon"></i>
     </div>
-    <div class="config-panel ${schedState.configPanelOpen?'open':''}" id="config-panel">
+    <div class="config-panel ${schedState.configPanelOpen ? 'open' : ''}" id="config-panel">
       <div class="config-panel-inner">
         <div class="config-panel-title"><i class="uil uil-setting"></i> Configuración</div>
         <div class="cfg-section">
@@ -564,7 +968,7 @@ function renderCronogramaPorEtapa() {
               <div class="cfg-field"><label>Hora fin</label><input type="time" class="cfg-input" id="cfg-lunch-end" value="${schedState.lunchEnd}"></div>
             </div>
             <button class="cfg-apply-btn" id="cfg-btn-lunch"><i class="uil uil-check"></i> Aplicar almuerzo</button>
-            ${schedState.lunchEnabled?`<button class="cfg-apply-btn" id="cfg-btn-lunch-clear" style="background:var(--bg-main);color:var(--text-secondary);border:1px solid var(--border-color);box-shadow:none;margin-top:4px;"><i class="uil uil-times"></i> Quitar almuerzo</button>`:''}
+            ${schedState.lunchEnabled ? `<button class="cfg-apply-btn" id="cfg-btn-lunch-clear" style="background:var(--bg-main);color:var(--text-secondary);border:1px solid var(--border-color);box-shadow:none;margin-top:4px;"><i class="uil uil-times"></i> Quitar almuerzo</button>` : ''}
           </div>
         </div>
         <div class="cfg-section">
@@ -581,7 +985,7 @@ function renderCronogramaPorEtapa() {
             <div class="cfg-field"><label>Máquina</label><select class="cfg-input" id="cfg-night-machine">${machOpts}</select></div>
             <button class="cfg-apply-btn" id="cfg-btn-night"><i class="uil uil-plus-circle"></i> Registrar turno</button>
             <div id="cfg-night-list" class="cfg-night-list">${buildNightHTML()}</div>
-            <div id="cfg-cena-section" style="display:${cenaVis?'block':'none'};">
+            <div id="cfg-cena-section" style="display:${cenaVis ? 'block' : 'none'};">
               <div style="margin:8px -12px 10px;padding:8px 12px;border-top:1px solid var(--border-color);background:#fffbf0;display:flex;align-items:center;gap:8px;font:600 10px 'Outfit',sans-serif;text-transform:uppercase;letter-spacing:.7px;color:#92400e;"><i class="uil uil-coffee"></i> Cena</div>
               <div class="cfg-row">
                 <div class="cfg-field"><label>Hora inicio</label><input type="time" class="cfg-input" id="cfg-cena-start" value="20:00"></div>
@@ -604,7 +1008,7 @@ function renderCronogramaPorEtapa() {
               <colgroup>
                 <col data-ci="0" style="width:${HOUR_W}px;">
                 <col data-ci="1" style="width:${DAY_W}px;">
-                ${ALL_MACHINES.map((_,i)=>`<col data-ci="${i+2}" style="width:${CELL_W}px;">`).join('')}
+                ${ALL_MACHINES.map((_, i) => `<col data-ci="${i + 2}" style="width:${CELL_W}px;">`).join('')}
               </colgroup>
               <thead>
                 <tr>${hr1}</tr>
@@ -633,7 +1037,7 @@ function renderCronogramaPorEtapa() {
 
 function exportCronogramaPorEtapa() {
   const startLbl = schedDateRange.start || '—';
-  const endLbl   = schedDateRange.end   || '—';
+  const endLbl = schedDateRange.end || '—';
   const machines = ALL_MACHINES;
   let csv = `\uFEFFCronograma por Etapa (${startLbl} → ${endLbl})\r\n`;
   csv += 'DÍA;HORA;' + machines.join(';') + '\r\n';
@@ -657,17 +1061,17 @@ function toggleConfigPanel() {
   schedState.configPanelOpen = !schedState.configPanelOpen;
   document.getElementById('config-panel')?.classList.toggle('open', schedState.configPanelOpen);
   const ico = document.getElementById('cfg-toggle-icon');
-  if (ico) ico.className = `uil ${schedState.configPanelOpen?'uil-angle-right':'uil-angle-left'}`;
+  if (ico) ico.className = `uil ${schedState.configPanelOpen ? 'uil-angle-right' : 'uil-angle-left'}`;
 }
 function reRenderEtapa() { schedState.configPanelOpen = true; renderCronogramaPorEtapa(); }
 
 // LUNCH
 function applyLunch() {
-  schedState.lunchStart   = document.getElementById('cfg-lunch-start')?.value || '13:00';
-  schedState.lunchEnd     = document.getElementById('cfg-lunch-end')?.value   || '14:00';
+  schedState.lunchStart = document.getElementById('cfg-lunch-start')?.value || '13:00';
+  schedState.lunchEnd = document.getElementById('cfg-lunch-end')?.value || '14:00';
   schedState.lunchEnabled = true;
   const sM = t2m(schedState.lunchStart), eM = t2m(schedState.lunchEnd);
-  ALL_MACHINES.forEach(m => DAYS.forEach((_,di) => HOUR_SLOTS.forEach((slot,si) => {
+  ALL_MACHINES.forEach(m => DAYS.forEach((_, di) => HOUR_SLOTS.forEach((slot, si) => {
     if (slot.start >= sM && slot.start < eM && schedState.cells[m]?.[di]?.[si] !== undefined)
       schedState.cells[m][di][si] = 'lunch';
   })));
@@ -675,7 +1079,7 @@ function applyLunch() {
 }
 function clearLunch() {
   schedState.lunchEnabled = false;
-  ALL_MACHINES.forEach(m => DAYS.forEach((_,di) => HOUR_SLOTS.forEach((_,si) => {
+  ALL_MACHINES.forEach(m => DAYS.forEach((_, di) => HOUR_SLOTS.forEach((_, si) => {
     if (schedState.cells[m]?.[di]?.[si] === 'lunch') schedState.cells[m][di][si] = '';
   })));
   reRenderEtapa();
@@ -683,17 +1087,17 @@ function clearLunch() {
 
 // NIGHT SHIFT
 function addNightShift() {
-  const machine   = document.getElementById('cfg-night-machine')?.value;
+  const machine = document.getElementById('cfg-night-machine')?.value;
   const dateStart = document.getElementById('cfg-night-date-start')?.value || '';
-  const dateEnd   = document.getElementById('cfg-night-date-end')?.value   || '';
-  const timeStart = document.getElementById('cfg-night-ts')?.value         || '';
-  const timeEnd   = document.getElementById('cfg-night-te')?.value         || '';
-  const cenaStart = document.getElementById('cfg-cena-start')?.value       || '';
-  const cenaEnd   = document.getElementById('cfg-cena-end')?.value         || '';
+  const dateEnd = document.getElementById('cfg-night-date-end')?.value || '';
+  const timeStart = document.getElementById('cfg-night-ts')?.value || '';
+  const timeEnd = document.getElementById('cfg-night-te')?.value || '';
+  const cenaStart = document.getElementById('cfg-cena-start')?.value || '';
+  const cenaEnd = document.getElementById('cfg-cena-end')?.value || '';
   if (!machine || !timeStart || !timeEnd) return;
   schedState.nightShifts.push({ machine, dateStart, dateEnd, timeStart, timeEnd, cenaStart, cenaEnd });
   const sM = t2m(timeStart), eM = t2m(timeEnd);
-  DAYS.forEach((_,di) => HOUR_SLOTS.forEach((slot,si) => {
+  DAYS.forEach((_, di) => HOUR_SLOTS.forEach((slot, si) => {
     if (slot.start >= sM && slot.start < eM && schedState.cells[machine]?.[di]?.[si] !== undefined)
       schedState.cells[machine][di][si] = 'night';
   }));
@@ -703,7 +1107,7 @@ function removeNightShift(idx) {
   const s = schedState.nightShifts[idx];
   if (s) {
     const sM = t2m(s.timeStart), eM = t2m(s.timeEnd);
-    DAYS.forEach((_,di) => HOUR_SLOTS.forEach((slot,si) => {
+    DAYS.forEach((_, di) => HOUR_SLOTS.forEach((slot, si) => {
       if (slot.start >= sM && slot.start < eM && schedState.cells[s.machine]?.[di]?.[si] === 'night')
         schedState.cells[s.machine][di][si] = '';
     }));
@@ -712,12 +1116,12 @@ function removeNightShift(idx) {
   reRenderEtapa();
 }
 function buildNightHTML() {
-  return schedState.nightShifts.map((s,i) => `
+  return schedState.nightShifts.map((s, i) => `
     <div class="cfg-night-item">
       <strong>${s.machine}</strong>
-      <span>${s.dateStart||'—'} → ${s.dateEnd||'—'}</span>
+      <span>${s.dateStart || '—'} → ${s.dateEnd || '—'}</span>
       <span>${s.timeStart} – ${s.timeEnd}</span>
-      ${s.cenaStart?`<span style="color:#92400e;">Cena: ${s.cenaStart}–${s.cenaEnd}</span>`:''}
+      ${s.cenaStart ? `<span style="color:#92400e;">Cena: ${s.cenaStart}–${s.cenaEnd}</span>` : ''}
       <button class="cfg-night-remove" onclick="removeNightShift(${i})">✕</button>
     </div>`).join('');
 }
@@ -731,7 +1135,7 @@ function onCellClick(e) {
   const next = cur === 'work' ? '' : 'work';
   schedState.cells[machine][di][si] = next;
   const stage = STAGES.find(s => s.machines.includes(machine));
-  cell.innerHTML = next === 'work' ? `<span class="sched-chip" style="background:${stage?.color||'#b91c2c'};">✓</span>` : '';
+  cell.innerHTML = next === 'work' ? `<span class="sched-chip" style="background:${stage?.color || '#b91c2c'};">✓</span>` : '';
   cell.style.background = next === 'work' ? '#fff1f2' : '#fff';
 }
 
@@ -743,11 +1147,13 @@ let ctxTargetRow = null;
 function setupContextMenu() {
   const menu = document.getElementById('ctx-menu');
   document.addEventListener('contextmenu', e => {
-    const tr = e.target.closest('#table-body tr');
+    // Detectar si el clic es en una fila de tabla (General o Planificación)
+    const tr = e.target.closest('#table-body tr, #plan-table-body tr');
     if (!tr) return;
+    
     e.preventDefault();
     ctxTargetRow = tr;
-    menu.style.top  = e.clientY + 'px';
+    menu.style.top = e.clientY + 'px';
     menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
     menu.classList.add('open');
     tr.classList.add('ctx-selected');
@@ -755,6 +1161,25 @@ function setupContextMenu() {
 
   document.getElementById('ctx-delete-row').addEventListener('click', () => {
     if (!ctxTargetRow) return;
+
+    // Lógica especial para Planificación
+    if (activeMenu === 'planificacion') {
+      const rmaN = ctxTargetRow.dataset.rma;
+      if (rmaN) {
+        rmaSessionList = rmaSessionList.filter(item => String(item.n) !== String(rmaN));
+        ctxTargetRow.remove();
+        // Si la lista queda vacía, re-renderizar para mostrar estado vacío
+        if (rmaSessionList.length === 0) {
+          const container = document.getElementById('rma-list-container');
+          if (container) container.innerHTML = renderRMATable();
+        }
+      }
+      ctxTargetRow = null;
+      menu.classList.remove('open');
+      return;
+    }
+
+    // Lógica original para otras tablas
     const ds = getActiveDataset();
     const rowIdx = +ctxTargetRow.dataset.rowIdx;
     if (ds && !isNaN(rowIdx) && rowIdx >= 0) ds.rows.splice(rowIdx, 1);
@@ -798,42 +1223,42 @@ function renderRMAView() {
 // ─────────────────────────────────────────────────────────────
 let btSearch = '', btColumnFilters = {}, btVisibleRows = [], btPage = 0, btLoadingMore = false;
 let btFilterPanelCol = null, btFilterPanelTempSel = null, filterPanelAllValues = [];
-const BT_PAGE_SIZE = 30, BT_SKIP_COLS = new Set([1,2]), BT_FILTERABLE = ['CÓDIGO','PRODUCTOS','LÍNEA'];
+const BT_PAGE_SIZE = 30, BT_SKIP_COLS = new Set([1, 2]), BT_FILTERABLE = ['CÓDIGO', 'PRODUCTOS', 'LÍNEA'];
 
 // ─────────────────────────────────────────────────────────────
 //  TABLE VIEW ROUTER
 // ─────────────────────────────────────────────────────────────
 function renderTableView() {
   const cfg = {
-    'bt-imprenta':   { label:'Tabla BT Imprenta',  data:DATA.btImprenta   },
-    'no-barnizado':  { label:'Tabla No Barnizado',  data:DATA.noBarnizado  },
-    'no-troquelado': { label:'Tabla No Troquelado', data:DATA.noTroquelado },
-    'no-pegado':     { label:'Tabla No Pegado',     data:DATA.noPegado     },
+    'bt-imprenta': { label: 'Tabla BT Imprenta', data: DATA.btImprenta },
+    'no-barnizado': { label: 'Tabla No Barnizado', data: DATA.noBarnizado },
+    'no-troquelado': { label: 'Tabla No Troquelado', data: DATA.noTroquelado },
+    'no-pegado': { label: 'Tabla No Pegado', data: DATA.noPegado },
   };
   const { label, data: dataset } = cfg[activeSubMenu] || {};
-  if (!dataset?.headers?.length) { contentBody.innerHTML=`<div class="empty-state"><p>No se pudo cargar la tabla.</p></div>`; return; }
+  if (!dataset?.headers?.length) { contentBody.innerHTML = `<div class="empty-state"><p>No se pudo cargar la tabla.</p></div>`; return; }
   pageTitle.textContent = label;
-  if (activeSubMenu === 'bt-imprenta') { btSearch=''; btColumnFilters={}; btPage=0; return renderBTImprentaView(dataset,label); }
+  if (activeSubMenu === 'bt-imprenta') { btSearch = ''; btColumnFilters = {}; btPage = 0; return renderBTImprentaView(dataset, label); }
 
   const isTroq = activeSubMenu === 'no-troquelado';
-  const isEditable = ['no-barnizado','no-troquelado','no-pegado'].includes(activeSubMenu);
+  const isEditable = ['no-barnizado', 'no-troquelado', 'no-pegado'].includes(activeSubMenu);
 
   // Start with one blank editable row if empty
   if (isEditable && dataset.rows.length === 0) {
     dataset.rows.push(Object.fromEntries(dataset.headers.map(h => [h, ''])));
   }
 
-  const headerHtml = dataset.headers.map(h=>`<th>${escH(h)}</th>`).join('');
-  const rowsHtml = dataset.rows.map((row,idx) => {
-    const tds = dataset.headers.map((h,ci) => {
+  const headerHtml = dataset.headers.map(h => `<th>${escH(h)}</th>`).join('');
+  const rowsHtml = dataset.rows.map((row, idx) => {
+    const tds = dataset.headers.map((h, ci) => {
       const val = row[h] || '';
       if (isEditable) {
         if (isTroq && ci === 0) return `<td><div class="editable-cell-wrap"><input class="cod-input" type="text" value="${escH(val)}" data-row="${idx}" data-col="${h}" placeholder="IFA-XXXXX" autocomplete="off"/></div></td>`;
-        return `<td><input class="editable-cell" type="text" value="${escH(val)}" data-row="${idx}" data-col="${h}" placeholder="${ci===0?'Código IFA':'Descripción'}"/></td>`;
+        return `<td><input class="editable-cell" type="text" value="${escH(val)}" data-row="${idx}" data-col="${h}" placeholder="${ci === 0 ? 'Código IFA' : 'Descripción'}"/></td>`;
       }
       return `<td title="${escH(val)}">${escH(val)}</td>`;
     }).join('');
-    return `<tr data-row-idx="${idx}" class="${isEditable?'new-row':''}"> ${tds}</tr>`;
+    return `<tr data-row-idx="${idx}" class="${isEditable ? 'new-row' : ''}"> ${tds}</tr>`;
   }).join('');
 
   contentBody.innerHTML = `
@@ -847,7 +1272,7 @@ function renderTableView() {
       <div class="table-footer">
         <span id="row-count">${dataset.rows.length} registro(s)</span>
         <div style="display:flex;gap:8px;">
-          ${isEditable?'<button class="btn-guardar" id="btn-guardar"><i class="uil uil-check"></i> Guardar</button>':''}
+          ${isEditable ? '<button class="btn-guardar" id="btn-guardar"><i class="uil uil-check"></i> Guardar</button>' : ''}
           <button class="btn-agregar" id="btn-agregar"><i class="uil uil-plus"></i> Agregar</button>
         </div>
       </div>
@@ -860,11 +1285,11 @@ function renderTableView() {
 
 // BT Imprenta
 function renderBTImprentaView(dataset, subtitle) {
-  const visHdrs = dataset.headers.filter((_,i) => !BT_SKIP_COLS.has(i));
+  const visHdrs = dataset.headers.filter((_, i) => !BT_SKIP_COLS.has(i));
   const headerHtml = visHdrs.map(h => {
     const filt = BT_FILTERABLE.includes(h), act = btColumnFilters[h]?.size > 0;
     return filt
-      ? `<th class="filterable ${act?'filter-active':''}" data-col="${escH(h)}">${escH(h)}<span class="filter-icon"><i class="uil uil-filter"></i></span></th>`
+      ? `<th class="filterable ${act ? 'filter-active' : ''}" data-col="${escH(h)}">${escH(h)}<span class="filter-icon"><i class="uil uil-filter"></i></span></th>`
       : `<th>${escH(h)}</th>`;
   }).join('');
 
@@ -873,7 +1298,7 @@ function renderBTImprentaView(dataset, subtitle) {
       <div class="table-toolbar">
         <div class="search-box"><i class="uil uil-search"></i>
           <input type="text" id="bt-search-input" placeholder="Buscar por producto..." autocomplete="off" value="${escH(btSearch)}">
-          <button class="search-clear ${btSearch?'visible':''}" id="bt-search-clear">&#x2715;</button>
+          <button class="search-clear ${btSearch ? 'visible' : ''}" id="bt-search-clear">&#x2715;</button>
         </div>
         <span class="toolbar-count" id="bt-toolbar-count"></span>
       </div>
@@ -888,83 +1313,83 @@ function renderBTImprentaView(dataset, subtitle) {
       <div class="table-footer"><span id="row-count">Cargando...</span><button class="btn-agregar" style="display:none;"></button></div>
     </div>`;
 
-  btnExportExcel.onclick = () => { exportDropdown.classList.remove('open'); exportCurrentTable(subtitle,{headers:visHdrs,rows:btVisibleRows}); };
+  btnExportExcel.onclick = () => { exportDropdown.classList.remove('open'); exportCurrentTable(subtitle, { headers: visHdrs, rows: btVisibleRows }); };
   const si = document.getElementById('bt-search-input'), sc = document.getElementById('bt-search-clear');
-  si.addEventListener('input', () => { btSearch=si.value; sc.classList.toggle('visible',!!btSearch); btApplyFilters(dataset,visHdrs); });
-  sc.addEventListener('click', () => { btSearch=''; si.value=''; sc.classList.remove('visible'); btApplyFilters(dataset,visHdrs); });
+  si.addEventListener('input', () => { btSearch = si.value; sc.classList.toggle('visible', !!btSearch); btApplyFilters(dataset, visHdrs); });
+  sc.addEventListener('click', () => { btSearch = ''; si.value = ''; sc.classList.remove('visible'); btApplyFilters(dataset, visHdrs); });
   document.querySelector('#main-table thead').addEventListener('click', e => {
-    const th=e.target.closest('th.filterable'); if(th) openFilterPanel(th.dataset.col,th,dataset,visHdrs);
+    const th = e.target.closest('th.filterable'); if (th) openFilterPanel(th.dataset.col, th, dataset, visHdrs);
   });
-  document.getElementById('bt-table-scroll').addEventListener('scroll', () => btOnScroll(dataset,visHdrs));
-  btApplyFilters(dataset,visHdrs);
+  document.getElementById('bt-table-scroll').addEventListener('scroll', () => btOnScroll(dataset, visHdrs));
+  btApplyFilters(dataset, visHdrs);
 }
 
-function btApplyFilters(dataset,visHdrs) {
-  const q=btSearch.trim().toLowerCase();
-  btVisibleRows=dataset.rows.filter(row=>{
-    if(q&&!(row['PRODUCTOS']||'').toLowerCase().includes(q)) return false;
-    for(const[col,vals]of Object.entries(btColumnFilters)) if(vals?.size>0&&!vals.has((row[col]||'').trim())) return false;
+function btApplyFilters(dataset, visHdrs) {
+  const q = btSearch.trim().toLowerCase();
+  btVisibleRows = dataset.rows.filter(row => {
+    if (q && !(row['PRODUCTOS'] || '').toLowerCase().includes(q)) return false;
+    for (const [col, vals] of Object.entries(btColumnFilters)) if (vals?.size > 0 && !vals.has((row[col] || '').trim())) return false;
     return true;
   });
-  btPage=0;
-  const tb=document.getElementById('table-body'); if(tb) tb.innerHTML='';
-  btRenderPage(visHdrs); btUpdateCounters(dataset); renderFilterBadges(dataset,visHdrs);
+  btPage = 0;
+  const tb = document.getElementById('table-body'); if (tb) tb.innerHTML = '';
+  btRenderPage(visHdrs); btUpdateCounters(dataset); renderFilterBadges(dataset, visHdrs);
 }
 function btRenderPage(visHdrs) {
-  const tb=document.getElementById('table-body'); if(!tb) return;
-  const start=btPage*BT_PAGE_SIZE, end=Math.min(start+BT_PAGE_SIZE,btVisibleRows.length);
-  btVisibleRows.slice(start,end).forEach(row=>{
-    const tr=document.createElement('tr');
-    visHdrs.forEach(h=>{ const td=document.createElement('td'); td.textContent=td.title=row[h]||''; tr.appendChild(td); });
+  const tb = document.getElementById('table-body'); if (!tb) return;
+  const start = btPage * BT_PAGE_SIZE, end = Math.min(start + BT_PAGE_SIZE, btVisibleRows.length);
+  btVisibleRows.slice(start, end).forEach(row => {
+    const tr = document.createElement('tr');
+    visHdrs.forEach(h => { const td = document.createElement('td'); td.textContent = td.title = row[h] || ''; tr.appendChild(td); });
     tb.appendChild(tr);
   });
   btPage++;
-  const loader=document.getElementById('bt-scroll-loader');
-  if(loader) loader.classList.toggle('visible',btPage*BT_PAGE_SIZE<btVisibleRows.length);
+  const loader = document.getElementById('bt-scroll-loader');
+  if (loader) loader.classList.toggle('visible', btPage * BT_PAGE_SIZE < btVisibleRows.length);
 }
-function btOnScroll(dataset,visHdrs) {
-  if(btLoadingMore) return;
-  const c=document.getElementById('bt-table-scroll'); if(!c) return;
-  if(c.scrollTop+c.clientHeight>=c.scrollHeight-120&&btPage*BT_PAGE_SIZE<btVisibleRows.length){
-    btLoadingMore=true; setTimeout(()=>{btRenderPage(visHdrs);btLoadingMore=false;},180);
+function btOnScroll(dataset, visHdrs) {
+  if (btLoadingMore) return;
+  const c = document.getElementById('bt-table-scroll'); if (!c) return;
+  if (c.scrollTop + c.clientHeight >= c.scrollHeight - 120 && btPage * BT_PAGE_SIZE < btVisibleRows.length) {
+    btLoadingMore = true; setTimeout(() => { btRenderPage(visHdrs); btLoadingMore = false; }, 180);
   }
 }
 function btUpdateCounters(dataset) {
-  const cnt=btVisibleRows.length, tot=dataset.rows.length;
-  const rc=document.getElementById('row-count'), tc=document.getElementById('bt-toolbar-count');
-  if(rc) rc.textContent=`${cnt} de ${tot} registro(s)`;
-  if(tc) tc.textContent=cnt<tot?`${cnt} resultado(s)`:`${tot} registros en total`;
+  const cnt = btVisibleRows.length, tot = dataset.rows.length;
+  const rc = document.getElementById('row-count'), tc = document.getElementById('bt-toolbar-count');
+  if (rc) rc.textContent = `${cnt} de ${tot} registro(s)`;
+  if (tc) tc.textContent = cnt < tot ? `${cnt} resultado(s)` : `${tot} registros en total`;
 }
 
 // FILTER PANEL
-function openFilterPanel(col,thEl,dataset,visHdrs){
-  const panel=document.getElementById('filter-panel'); btFilterPanelCol=col;
-  const map={};
-  dataset.rows.forEach(r=>{const v=(r[col]||'').trim();map[v]=(map[v]||0)+1;});
-  filterPanelAllValues=Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([v,c])=>({v,c}));
-  btFilterPanelTempSel=btColumnFilters[col]?new Set(btColumnFilters[col]):null;
-  const rect=thEl.getBoundingClientRect();
-  panel.style.top=(rect.bottom+4)+'px'; panel.style.left=Math.min(rect.left,window.innerWidth-260)+'px';
+function openFilterPanel(col, thEl, dataset, visHdrs) {
+  const panel = document.getElementById('filter-panel'); btFilterPanelCol = col;
+  const map = {};
+  dataset.rows.forEach(r => { const v = (r[col] || '').trim(); map[v] = (map[v] || 0) + 1; });
+  filterPanelAllValues = Object.entries(map).sort((a, b) => b[1] - a[1]).map(([v, c]) => ({ v, c }));
+  btFilterPanelTempSel = btColumnFilters[col] ? new Set(btColumnFilters[col]) : null;
+  const rect = thEl.getBoundingClientRect();
+  panel.style.top = (rect.bottom + 4) + 'px'; panel.style.left = Math.min(rect.left, window.innerWidth - 260) + 'px';
   panel.classList.add('open');
-  const fs=document.getElementById('filter-search'); fs.value=''; fs.focus();
+  const fs = document.getElementById('filter-search'); fs.value = ''; fs.focus();
   renderFilterOptions(filterPanelAllValues);
-  fs.oninput=()=>renderFilterOptions(filterPanelAllValues.filter(i=>i.v.toLowerCase().includes(fs.value.toLowerCase())));
+  fs.oninput = () => renderFilterOptions(filterPanelAllValues.filter(i => i.v.toLowerCase().includes(fs.value.toLowerCase())));
   // Select All / None
-  document.getElementById('btn-filter-select-all').onclick=()=>{
-    btFilterPanelTempSel=new Set(filterPanelAllValues.map(i=>i.v));
-    renderFilterOptions(filterPanelAllValues.filter(i=>i.v.toLowerCase().includes(fs.value.toLowerCase())));
+  document.getElementById('btn-filter-select-all').onclick = () => {
+    btFilterPanelTempSel = new Set(filterPanelAllValues.map(i => i.v));
+    renderFilterOptions(filterPanelAllValues.filter(i => i.v.toLowerCase().includes(fs.value.toLowerCase())));
   };
-  document.getElementById('btn-filter-select-none').onclick=()=>{
-    btFilterPanelTempSel=new Set();
-    renderFilterOptions(filterPanelAllValues.filter(i=>i.v.toLowerCase().includes(fs.value.toLowerCase())));
+  document.getElementById('btn-filter-select-none').onclick = () => {
+    btFilterPanelTempSel = new Set();
+    renderFilterOptions(filterPanelAllValues.filter(i => i.v.toLowerCase().includes(fs.value.toLowerCase())));
   };
   // Note: 'Limpiar' button removed per user request
-  document.getElementById('btn-filter-apply').onclick=()=>{
-    if(!btFilterPanelTempSel||btFilterPanelTempSel.size===0) delete btColumnFilters[col];
-    else btColumnFilters[col]=new Set(btFilterPanelTempSel);
-    closeFilterPanel(); btApplyFilters(DATA.btImprenta,visHdrs);
-    const th=document.querySelector(`#main-table thead th[data-col="${col}"]`);
-    if(th) th.classList.toggle('filter-active',!!(btColumnFilters[col]?.size>0));
+  document.getElementById('btn-filter-apply').onclick = () => {
+    if (!btFilterPanelTempSel || btFilterPanelTempSel.size === 0) delete btColumnFilters[col];
+    else btColumnFilters[col] = new Set(btFilterPanelTempSel);
+    closeFilterPanel(); btApplyFilters(DATA.btImprenta, visHdrs);
+    const th = document.querySelector(`#main-table thead th[data-col="${col}"]`);
+    if (th) th.classList.toggle('filter-active', !!(btColumnFilters[col]?.size > 0));
   };
 }
 
@@ -1011,124 +1436,124 @@ function showSaveToast(msg) {
   t.textContent = msg;
   t.style.opacity = '1'; t.style.display = 'block';
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => { t.style.opacity = '0'; setTimeout(()=>t.style.display='none', 300); }, 2500);
+  t._timer = setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.style.display = 'none', 300); }, 2500);
 }
-function renderFilterOptions(items){
-  const fb=document.getElementById('filter-panel-body'); if(!fb) return;
-  fb.innerHTML=items.map(({v,c})=>{
-    const chk=!btFilterPanelTempSel||btFilterPanelTempSel.has(v);
-    return `<label class="filter-option"><input type="checkbox" value="${escH(v)}" ${chk?'checked':''}><span>${v===''?'(vacío)':escH(v)} <span style="color:var(--text-muted);font-size:11px;">(${c})</span></span></label>`;
+function renderFilterOptions(items) {
+  const fb = document.getElementById('filter-panel-body'); if (!fb) return;
+  fb.innerHTML = items.map(({ v, c }) => {
+    const chk = !btFilterPanelTempSel || btFilterPanelTempSel.has(v);
+    return `<label class="filter-option"><input type="checkbox" value="${escH(v)}" ${chk ? 'checked' : ''}><span>${v === '' ? '(vacío)' : escH(v)} <span style="color:var(--text-muted);font-size:11px;">(${c})</span></span></label>`;
   }).join('');
-  fb.querySelectorAll('input[type="checkbox"]').forEach(cb=>cb.addEventListener('change',()=>{
-    if(!btFilterPanelTempSel) btFilterPanelTempSel=new Set(filterPanelAllValues.map(i=>i.v));
-    cb.checked?btFilterPanelTempSel.add(cb.value):btFilterPanelTempSel.delete(cb.value);
+  fb.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.addEventListener('change', () => {
+    if (!btFilterPanelTempSel) btFilterPanelTempSel = new Set(filterPanelAllValues.map(i => i.v));
+    cb.checked ? btFilterPanelTempSel.add(cb.value) : btFilterPanelTempSel.delete(cb.value);
   }));
 }
-function closeFilterPanel(){ document.getElementById('filter-panel')?.classList.remove('open'); btFilterPanelCol=null; }
-document.addEventListener('mousedown',e=>{
-  const p=document.getElementById('filter-panel');
-  if(p?.classList.contains('open')&&!p.contains(e.target)&&!e.target.closest('th.filterable')) closeFilterPanel();
+function closeFilterPanel() { document.getElementById('filter-panel')?.classList.remove('open'); btFilterPanelCol = null; }
+document.addEventListener('mousedown', e => {
+  const p = document.getElementById('filter-panel');
+  if (p?.classList.contains('open') && !p.contains(e.target) && !e.target.closest('th.filterable')) closeFilterPanel();
 });
-function renderFilterBadges(dataset,visHdrs){
-  const bar=document.getElementById('bt-filters-bar'); if(!bar) return;
-  const active=Object.entries(btColumnFilters).filter(([,v])=>v?.size>0);
-  if(!active.length){bar.classList.remove('has-filters');bar.innerHTML='';return;}
+function renderFilterBadges(dataset, visHdrs) {
+  const bar = document.getElementById('bt-filters-bar'); if (!bar) return;
+  const active = Object.entries(btColumnFilters).filter(([, v]) => v?.size > 0);
+  if (!active.length) { bar.classList.remove('has-filters'); bar.innerHTML = ''; return; }
   bar.classList.add('has-filters');
-  bar.innerHTML=active.map(([col,vals])=>`<span class="filter-badge">${escH(vals.size===1?`${col}: ${[...vals][0]}`:`${col}: ${vals.size} valores`)}<button class="filter-badge-remove" data-col="${escH(col)}">&times;</button></span>`).join('')
-    +`<button class="filters-clear-all" id="btn-clear-all-filters">Limpiar todo</button>`;
-  bar.querySelectorAll('.filter-badge-remove').forEach(btn=>btn.addEventListener('click',()=>{
+  bar.innerHTML = active.map(([col, vals]) => `<span class="filter-badge">${escH(vals.size === 1 ? `${col}: ${[...vals][0]}` : `${col}: ${vals.size} valores`)}<button class="filter-badge-remove" data-col="${escH(col)}">&times;</button></span>`).join('')
+    + `<button class="filters-clear-all" id="btn-clear-all-filters">Limpiar todo</button>`;
+  bar.querySelectorAll('.filter-badge-remove').forEach(btn => btn.addEventListener('click', () => {
     delete btColumnFilters[btn.dataset.col];
     document.querySelector(`#main-table thead th[data-col="${btn.dataset.col}"]`)?.classList.remove('filter-active');
-    btApplyFilters(dataset,visHdrs);
+    btApplyFilters(dataset, visHdrs);
   }));
-  document.getElementById('btn-clear-all-filters')?.addEventListener('click',()=>{
-    btColumnFilters={};
-    document.querySelectorAll('#main-table thead th.filter-active').forEach(t=>t.classList.remove('filter-active'));
-    btApplyFilters(dataset,visHdrs);
+  document.getElementById('btn-clear-all-filters')?.addEventListener('click', () => {
+    btColumnFilters = {};
+    document.querySelectorAll('#main-table thead th.filter-active').forEach(t => t.classList.remove('filter-active'));
+    btApplyFilters(dataset, visHdrs);
   });
 }
 
 // TROQUELADO AUTOCOMPLETE
 let autocompleteCodInput = null;
-function setupTroqueladoTable(){
-  const tb=document.getElementById('table-body'); if(!tb) return;
-  tb.addEventListener('input',onCodInput);
-  tb.addEventListener('keydown',onCodKeydown);
-  tb.addEventListener('change',onEditCellChange);
+function setupTroqueladoTable() {
+  const tb = document.getElementById('table-body'); if (!tb) return;
+  tb.addEventListener('input', onCodInput);
+  tb.addEventListener('keydown', onCodKeydown);
+  tb.addEventListener('change', onEditCellChange);
 }
-function onCodInput(e){
-  const inp=e.target; if(!inp.classList.contains('cod-input')) return;
-  const q=inp.value.trim(); if(!q){hideAutocomplete();return;}
-  const matches=searchImprenta(q); if(!matches.length){hideAutocomplete();return;}
-  autocompleteCodInput=inp; autocompleteSelected=-1;
-  const rect=inp.getBoundingClientRect();
-  autocompleteEl.style.top=(rect.bottom+4)+'px'; autocompleteEl.style.left=rect.left+'px'; autocompleteEl.style.display='block';
-  autocompleteEl.innerHTML=matches.map((r,i)=>{
-    const cod=r['CÓDIGO']||r.c||'',prod=r['PRODUTOS']||r['PRODUCTOS']||r.p||'';
+function onCodInput(e) {
+  const inp = e.target; if (!inp.classList.contains('cod-input')) return;
+  const q = inp.value.trim(); if (!q) { hideAutocomplete(); return; }
+  const matches = searchImprenta(q); if (!matches.length) { hideAutocomplete(); return; }
+  autocompleteCodInput = inp; autocompleteSelected = -1;
+  const rect = inp.getBoundingClientRect();
+  autocompleteEl.style.top = (rect.bottom + 4) + 'px'; autocompleteEl.style.left = rect.left + 'px'; autocompleteEl.style.display = 'block';
+  autocompleteEl.innerHTML = matches.map((r, i) => {
+    const cod = r['CÓDIGO'] || r.c || '', prod = r['PRODUTOS'] || r['PRODUCTOS'] || r.p || '';
     return `<div class="autocomplete-item" data-idx="${i}" data-cod="${escH(cod)}" data-prod="${escH(prod)}"><span class="autocomplete-cod">${escH(cod)}</span><span class="autocomplete-name">${escH(prod)}</span></div>`;
   }).join('');
-  autocompleteEl.querySelectorAll('.autocomplete-item').forEach(el=>el.addEventListener('mousedown',ev=>{ev.preventDefault();selectAutocomplete(el.dataset.cod,el.dataset.prod);}));
+  autocompleteEl.querySelectorAll('.autocomplete-item').forEach(el => el.addEventListener('mousedown', ev => { ev.preventDefault(); selectAutocomplete(el.dataset.cod, el.dataset.prod); }));
 }
-function searchImprenta(q){const lq=q.toLowerCase(),lk=window.BT_LOOKUP||[];if(lk.length)return lk.filter(i=>(i.c||'').toLowerCase().includes(lq)).slice(0,30).map(i=>({'CÓDIGO':i.c,'PRODUTOS':i.p}));return(DATA.btImprenta.rows||[]).filter(r=>(r['CÓDIGO']||'').toLowerCase().includes(lq)).slice(0,30);}
-function hideAutocomplete(){autocompleteEl.style.display='none';autocompleteEl.innerHTML='';autocompleteSelected=-1;}
-function selectAutocomplete(cod,prod){
-  if(!autocompleteCodInput) return;
-  autocompleteCodInput.value=cod;
-  const ri=+autocompleteCodInput.dataset.row;
-  if(!isNaN(ri)&&DATA.noTroquelado.rows[ri]){DATA.noTroquelado.rows[ri]['COD IFA']=cod;DATA.noTroquelado.rows[ri]['ITEM']=prod;}
-  const tr=autocompleteCodInput.closest('tr'), edi=tr?.querySelector('.editable-cell');
-  if(edi){edi.value=prod;if(!isNaN(ri)&&DATA.noTroquelado.rows[ri])DATA.noTroquelado.rows[ri]['ITEM']=prod;}
-  hideAutocomplete();updateRowCount();
+function searchImprenta(q) { const lq = q.toLowerCase(), lk = window.BT_LOOKUP || []; if (lk.length) return lk.filter(i => (i.c || '').toLowerCase().includes(lq)).slice(0, 30).map(i => ({ 'CÓDIGO': i.c, 'PRODUTOS': i.p })); return (DATA.btImprenta.rows || []).filter(r => (r['CÓDIGO'] || '').toLowerCase().includes(lq)).slice(0, 30); }
+function hideAutocomplete() { autocompleteEl.style.display = 'none'; autocompleteEl.innerHTML = ''; autocompleteSelected = -1; }
+function selectAutocomplete(cod, prod) {
+  if (!autocompleteCodInput) return;
+  autocompleteCodInput.value = cod;
+  const ri = +autocompleteCodInput.dataset.row;
+  if (!isNaN(ri) && DATA.noTroquelado.rows[ri]) { DATA.noTroquelado.rows[ri]['COD IFA'] = cod; DATA.noTroquelado.rows[ri]['ITEM'] = prod; }
+  const tr = autocompleteCodInput.closest('tr'), edi = tr?.querySelector('.editable-cell');
+  if (edi) { edi.value = prod; if (!isNaN(ri) && DATA.noTroquelado.rows[ri]) DATA.noTroquelado.rows[ri]['ITEM'] = prod; }
+  hideAutocomplete(); updateRowCount();
 }
-function onCodKeydown(e){
-  const items=autocompleteEl.querySelectorAll('.autocomplete-item');
-  if(autocompleteEl.style.display==='none'||!items.length) return;
-  if(e.key==='ArrowDown'){e.preventDefault();autocompleteSelected=Math.min(autocompleteSelected+1,items.length-1);highlightAuto(items);}
-  else if(e.key==='ArrowUp'){e.preventDefault();autocompleteSelected=Math.max(autocompleteSelected-1,-1);highlightAuto(items);}
-  else if(e.key==='Enter'){e.preventDefault();if(autocompleteSelected>=0)selectAutocomplete(items[autocompleteSelected].dataset.cod,items[autocompleteSelected].dataset.prod);else hideAutocomplete();}
-  else if(e.key==='Escape') hideAutocomplete();
+function onCodKeydown(e) {
+  const items = autocompleteEl.querySelectorAll('.autocomplete-item');
+  if (autocompleteEl.style.display === 'none' || !items.length) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); autocompleteSelected = Math.min(autocompleteSelected + 1, items.length - 1); highlightAuto(items); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); autocompleteSelected = Math.max(autocompleteSelected - 1, -1); highlightAuto(items); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (autocompleteSelected >= 0) selectAutocomplete(items[autocompleteSelected].dataset.cod, items[autocompleteSelected].dataset.prod); else hideAutocomplete(); }
+  else if (e.key === 'Escape') hideAutocomplete();
 }
-function highlightAuto(items){items.forEach((it,i)=>{it.classList.toggle('selected',i===autocompleteSelected);if(i===autocompleteSelected)it.scrollIntoView({block:'nearest'});});}
-function onEditCellChange(e){const inp=e.target,ri=+inp.dataset.row,col=inp.dataset.col;if(!isNaN(ri)&&col&&DATA.noTroquelado.rows[ri])DATA.noTroquelado.rows[ri][col]=inp.value;}
-document.addEventListener('mousedown',e=>{if(!autocompleteEl.contains(e.target)&&e.target!==autocompleteCodInput)hideAutocomplete();});
+function highlightAuto(items) { items.forEach((it, i) => { it.classList.toggle('selected', i === autocompleteSelected); if (i === autocompleteSelected) it.scrollIntoView({ block: 'nearest' }); }); }
+function onEditCellChange(e) { const inp = e.target, ri = +inp.dataset.row, col = inp.dataset.col; if (!isNaN(ri) && col && DATA.noTroquelado.rows[ri]) DATA.noTroquelado.rows[ri][col] = inp.value; }
+document.addEventListener('mousedown', e => { if (!autocompleteEl.contains(e.target) && e.target !== autocompleteCodInput) hideAutocomplete(); });
 
 // ADD ROW
-function addNewRow(){
-  const isTroq=activeSubMenu==='no-troquelado',ds=getActiveDataset();if(!ds)return;
-  const idx=ds.rows.length,row=Object.fromEntries(ds.headers.map(h=>[h,'']));ds.rows.push(row);
-  const tb=document.getElementById('table-body');if(!tb)return;
-  const tr=document.createElement('tr');tr.dataset.rowIdx=idx;tr.classList.add('new-row');
-  ds.headers.forEach((h,ci)=>{
-    const td=document.createElement('td');
-    if(isTroq)td.innerHTML=ci===0?`<div class="editable-cell-wrap"><input class="cod-input" type="text" value="" data-row="${idx}" data-col="${h}" placeholder="IFA-XXXXX" autocomplete="off"/></div>`:`<input class="editable-cell" type="text" value="" data-row="${idx}" data-col="${h}" placeholder="Descripción"/>`;
-    else td.innerHTML=`<input class="editable-cell" type="text" value="" data-row="${idx}" data-col="${h}"/>`;
+function addNewRow() {
+  const isTroq = activeSubMenu === 'no-troquelado', ds = getActiveDataset(); if (!ds) return;
+  const idx = ds.rows.length, row = Object.fromEntries(ds.headers.map(h => [h, ''])); ds.rows.push(row);
+  const tb = document.getElementById('table-body'); if (!tb) return;
+  const tr = document.createElement('tr'); tr.dataset.rowIdx = idx; tr.classList.add('new-row');
+  ds.headers.forEach((h, ci) => {
+    const td = document.createElement('td');
+    if (isTroq) td.innerHTML = ci === 0 ? `<div class="editable-cell-wrap"><input class="cod-input" type="text" value="" data-row="${idx}" data-col="${h}" placeholder="IFA-XXXXX" autocomplete="off"/></div>` : `<input class="editable-cell" type="text" value="" data-row="${idx}" data-col="${h}" placeholder="Descripción"/>`;
+    else td.innerHTML = `<input class="editable-cell" type="text" value="" data-row="${idx}" data-col="${h}"/>`;
     tr.appendChild(td);
   });
   tb.appendChild(tr);
-  if(isTroq){setupTroqueladoTable();tr.querySelector('.cod-input')?.focus();}else tr.querySelector('input')?.focus();
+  if (isTroq) { setupTroqueladoTable(); tr.querySelector('.cod-input')?.focus(); } else tr.querySelector('input')?.focus();
   updateRowCount();
 }
-function updateRowCount(){const el=document.getElementById('row-count'),ds=getActiveDataset();if(el&&ds)el.textContent=`${ds.rows.length} registro(s)`;}
-function getActiveDataset(){return activeSubMenu==='bt-imprenta'?DATA.btImprenta:activeSubMenu==='no-barnizado'?DATA.noBarnizado:activeSubMenu==='no-troquelado'?DATA.noTroquelado:activeSubMenu==='no-pegado'?DATA.noPegado:null;}
+function updateRowCount() { const el = document.getElementById('row-count'), ds = getActiveDataset(); if (el && ds) el.textContent = `${ds.rows.length} registro(s)`; }
+function getActiveDataset() { return activeSubMenu === 'bt-imprenta' ? DATA.btImprenta : activeSubMenu === 'no-barnizado' ? DATA.noBarnizado : activeSubMenu === 'no-troquelado' ? DATA.noTroquelado : activeSubMenu === 'no-pegado' ? DATA.noPegado : null; }
 
 // EXPORT TABLE
-function exportCurrentTable(name,dataset){
-  if(!dataset?.headers) return;
-  let csv='\uFEFF'+dataset.headers.join(';')+'\r\n';
-  dataset.rows.forEach(row=>{csv+=dataset.headers.map(h=>{let v=row[h]||'';if(v.includes(';')||v.includes('"')||v.includes('\n'))v='"'+v.replace(/"/g,'""')+'"';return v;}).join(';')+'\r\n';});
-  dlCsv(csv,`${name.replace(/\s+/g,'_')}_${fmtDate()}.csv`);
+function exportCurrentTable(name, dataset) {
+  if (!dataset?.headers) return;
+  let csv = '\uFEFF' + dataset.headers.join(';') + '\r\n';
+  dataset.rows.forEach(row => { csv += dataset.headers.map(h => { let v = row[h] || ''; if (v.includes(';') || v.includes('"') || v.includes('\n')) v = '"' + v.replace(/"/g, '""') + '"'; return v; }).join(';') + '\r\n'; });
+  dlCsv(csv, `${name.replace(/\s+/g, '_')}_${fmtDate()}.csv`);
 }
-function setupExportMenu(){
-  btnExportDots.addEventListener('click',e=>{e.stopPropagation();exportDropdown.classList.toggle('open');});
-  document.addEventListener('click',()=>exportDropdown.classList.remove('open'));
-  exportDropdown.addEventListener('click',e=>e.stopPropagation());
+function setupExportMenu() {
+  btnExportDots.addEventListener('click', e => { e.stopPropagation(); exportDropdown.classList.toggle('open'); });
+  document.addEventListener('click', () => exportDropdown.classList.remove('open'));
+  exportDropdown.addEventListener('click', e => e.stopPropagation());
 }
 
 // UTILS
-function t2m(t){if(!t)return 0;const[h,m]=t.split(':').map(Number);return h*60+m;}
-function fmtDate(){const d=new Date();return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;}
-function dlCsv(csv,name){const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));const a=Object.assign(document.createElement('a'),{href:url,download:name});document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}
-function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function t2m(t) { if (!t) return 0; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function fmtDate() { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; }
+function dlCsv(csv, name) { const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); const a = Object.assign(document.createElement('a'), { href: url, download: name }); document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
+function escH(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 // ─────────────────────────────────────────────────────────────
 //  RESIZABLE COLUMNS & ROWS — SCHEDULE TABLES
@@ -1143,8 +1568,8 @@ function initResizable(viewType) {
   // Etapa: machine headers — update <col> element for pixel-accurate widths
   table.querySelectorAll('th[data-machine-key]').forEach(th => {
     const machineKey = th.dataset.machineKey;
-    const mIdx       = ALL_MACHINES.indexOf(machineKey);
-    const colEl      = mIdx >= 0 ? table.querySelector(`col[data-ci="${mIdx + 2}"]`) : null;
+    const mIdx = ALL_MACHINES.indexOf(machineKey);
+    const colEl = mIdx >= 0 ? table.querySelector(`col[data-ci="${mIdx + 2}"]`) : null;
     addColResizeHandle(th, newW => {
       if (colEl) colEl.style.width = newW + 'px';
     });
@@ -1155,7 +1580,7 @@ function initResizable(viewType) {
     const stageIdx = STAGES.findIndex(s => s.id === th.dataset.stageKey);
     addColResizeHandle(th, newW => {
       table.querySelectorAll(`td[data-stageidx="${stageIdx}"]`).forEach(td => {
-        td.style.width    = newW + 'px';
+        td.style.width = newW + 'px';
         td.style.minWidth = newW + 'px';
       });
     });
@@ -1188,25 +1613,25 @@ function wireColHandle(handle, th, updateFn) {
     e.stopPropagation();
     const startX = e.clientX;
     const startW = th.getBoundingClientRect().width;
-    document.body.style.cursor     = 'col-resize';
+    document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
     const onMove = ev => {
       const newW = Math.max(50, startW + (ev.clientX - startX));
-      th.style.width    = newW + 'px';
+      th.style.width = newW + 'px';
       th.style.minWidth = newW + 'px';
       if (typeof updateFn === 'function') updateFn(newW);
     };
 
     const onUp = () => {
-      document.body.style.cursor     = '';
+      document.body.style.cursor = '';
       document.body.style.userSelect = '';
       document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup',   onUp);
+      document.removeEventListener('mouseup', onUp);
     };
 
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup',   onUp);
+    document.addEventListener('mouseup', onUp);
   });
 }
 
@@ -1220,10 +1645,10 @@ function addRowResizeHandle(td) {
   handle.addEventListener('mousedown', e => {
     e.preventDefault();
     e.stopPropagation();
-    const startY  = e.clientY;
-    const tr      = td.closest('tr');
-    const startH  = tr ? tr.getBoundingClientRect().height : 32;
-    document.body.style.cursor    = 'row-resize';
+    const startY = e.clientY;
+    const tr = td.closest('tr');
+    const startH = tr ? tr.getBoundingClientRect().height : 32;
+    document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
 
     const onMove = ev => {
@@ -1231,20 +1656,20 @@ function addRowResizeHandle(td) {
       if (tr) {
         tr.style.height = newH + 'px';
         tr.querySelectorAll('td').forEach(cell => {
-          cell.style.height    = newH + 'px';
+          cell.style.height = newH + 'px';
           cell.style.minHeight = newH + 'px';
         });
       }
     };
 
     const onUp = () => {
-      document.body.style.cursor     = '';
+      document.body.style.cursor = '';
       document.body.style.userSelect = '';
       document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup',   onUp);
+      document.removeEventListener('mouseup', onUp);
     };
 
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup',   onUp);
+    document.addEventListener('mouseup', onUp);
   });
 }
