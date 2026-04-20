@@ -118,6 +118,35 @@ const btnExportExcel = document.getElementById('btn-export-excel');
 const autocompleteEl = document.getElementById('autocomplete-dropdown');
 
 // ─────────────────────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────────────────────
+function escH(str) {
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/[&<>'"]/g, tag => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;'
+  }[tag]));
+}
+
+function getColorByRMA(rma) {
+  if (!rma) return '#1e3a8a';
+  const palette = [
+    '#1e3a8a', '#1d4ed8', '#2563eb', // Azules
+    '#0e7490', '#0891b2', '#0284c7', // Celestes / Blue-greens
+    '#166534', '#15803d', '#16a34a', '#0f766e', // Verdes
+    '#78350f', '#92400e', '#854d0e'  // Cafés (Sin Rojos)
+  ];
+  let hash = 0;
+  for (let i = 0; i < rma.length; i++) {
+    hash = rma.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return palette[Math.abs(hash) % palette.length];
+}
+
+// ─────────────────────────────────────────────────────────────
 //  CSV HELPERS
 // ─────────────────────────────────────────────────────────────
 function parseCSV(text) {
@@ -417,6 +446,9 @@ function renderRMATable() {
       <div class="footer-right">
         <button class="btn-cargar-datos" onclick="cargarDatosTecnicos()">
           <i class="uil uil-sync"></i> CARGAR
+        </button>
+        <button class="btn-generar-crono" onclick="generarCronogramaEtapa()" style="margin-left:8px;background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:7px;">
+          <i class="uil uil-calendar-alt"></i> GENERAR CRONOGRAMA
         </button>
       </div>
     </div>
@@ -808,6 +840,145 @@ function exportCronogramaGeneral() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// LÓGICA DE CÁLCULO DE BLOQUES - IMPRESIÓN OFFSET
+// ─────────────────────────────────────────────────────────────
+let scheduledBlocks = {
+  'SPEEDMASTER': {},
+  'MOZP': {},
+  'GTO-52': {}
+};
+
+const TURNO_INICIO = 480;
+const TURNO_FIN = 1050;
+const MINUTOS_TOTALES_DIA = 570;
+
+function mkTimeFromMins(min) {
+  const total = min; // Ya viene en minutos absolutos desde las 00:00, siendo 480 las 08:00
+  const h = Math.floor(total / 60);
+  const m = Math.floor(total % 60);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+async function generarCronogramaEtapa() {
+  if (rmaSessionList.length === 0) {
+    showSaveToast("Agrega RMAs en Planificación primero");
+    return;
+  }
+
+  if (!supabaseClient) {
+    showSaveToast("Error: Sin conexión a Supabase (Tiempos)");
+    return;
+  }
+
+  showSaveToast("Calculando Cronograma...");
+
+  try {
+    const { data: tiemposData, error } = await supabaseClient.from('tiempos').select('*');
+    if (error) throw error;
+    
+    ALL_MACHINES.forEach(m => scheduledBlocks[m] = {});
+    
+    const queues = {};
+    ALL_MACHINES.forEach(m => queues[m] = []);
+    rmaSessionList.forEach(item => {
+      let mqKey = null;
+      if (item.maquina === 'SPEEDMASTER' || item.maquina === 'MOZP' || item.maquina === 'GTO-52') {
+        mqKey = item.maquina;
+      }
+      if (mqKey) queues[mqKey].push(item);
+    });
+
+    ['SPEEDMASTER', 'MOZP', 'GTO-52'].forEach(machine => {
+      if (!queues[machine] || queues[machine].length === 0) return;
+      
+      let cursorDay = 0;
+      let cursorMin = TURNO_INICIO;
+      let lastRowLinea = null;
+      
+      const mqTiempos = tiemposData.find(t => {
+        const maqt = (t.maquina || '').toUpperCase().replace(/\s|-/g, '');
+        const mac  = machine.toUpperCase().replace(/\s|-/g, '');
+        return maqt === mac;
+      }) || {};
+
+      function addBlock(duration, type, job, details, customClass) {
+        let remaining = duration;
+        let iter = 0;
+        while (remaining > 0 && iter < 50) {
+          iter++;
+          const availableInDay = TURNO_FIN - cursorMin;
+          const chunk = Math.min(remaining, availableInDay);
+          
+          if (!scheduledBlocks[machine][cursorDay]) {
+            scheduledBlocks[machine][cursorDay] = [];
+          }
+          
+          scheduledBlocks[machine][cursorDay].push({
+            startMin: cursorMin,
+            duration: chunk,
+            type: type,
+            job: job,
+            details: details,
+            cssClass: customClass || ''
+          });
+          
+          cursorMin += chunk;
+          remaining -= chunk;
+          
+          if (cursorMin >= TURNO_FIN && remaining > 0) {
+            cursorDay++;
+            cursorMin = TURNO_INICIO;
+          }
+        }
+      }
+
+      queues[machine].forEach((job, index) => {
+        const cuerposImp = parseFloat(job.n_colores) || 0; 
+        const tirajes = parseFloat(job.tirajes) || 0;
+        
+        const wash = parseFloat(mqTiempos.cambio_color_lavado_rod_tin_x_cuerpo) || 0;
+        const prep = parseFloat(mqTiempos.preparado_de_tinta_x_cuerpo) || 0;
+        const paramL = (wash + prep) * cuerposImp;
+        
+        const placaCuerpo = parseFloat(mqTiempos.cambio_placa_por_cuerpo) || 0;
+        const aprobacion = parseFloat(mqTiempos.aprobacion) || 0;
+        const paramP = (placaCuerpo * cuerposImp) + aprobacion;
+        
+        const valorProm = parseFloat(mqTiempos.valor_prom) || 1; 
+        const paramC = (tirajes / valorProm) * 60;
+        
+        if (index === 0 || job.linea !== lastRowLinea) {
+          if (paramL > 0) {
+             addBlock(paramL, 'Cambio de línea + Preparado', job, `${paramL.toFixed(0)} min`, 'block-a-linea');
+          }
+        }
+        lastRowLinea = job.linea;
+        
+        if (paramP > 0) {
+           addBlock(paramP, 'Cambio de placa + Aprobación', job, `${paramP.toFixed(0)} min`, 'block-b-placa');
+        }
+        
+        if (paramC > 0) {
+           let detailsC = `Línea: ${job.linea || '-'} | Tirajes: ${tirajes} | Colores: ${cuerposImp}`;
+           addBlock(paramC, job.producto || 'Producción', job, detailsC, 'block-c-prod');
+        }
+      });
+    });
+    
+    if (activeMenu !== 'etapa') {
+      selectMenu('etapa');
+    } else {
+      renderCronogramaPorEtapa();
+    }
+    showSaveToast("Cronograma calculado exitosamente");
+
+  } catch (err) {
+    console.error("Error generating cronograma:", err);
+    showSaveToast("Error al generar cronograma");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 //  CRONOGRAMA POR ETAPA
 //  COLUMNS = Machines grouped by Stage (with 2-row headers)
 //  ROWS    = Days × Hour slots (08:00–17:30, 11 slots each day)
@@ -889,16 +1060,35 @@ function renderCronogramaPorEtapa() {
     });
   });
 
-  // ── BODY: Days × Hours ──
+  // ── BODY: Days × Event Boundaries ──
   let body = '';
   DAYS.forEach((day, di) => {
     const isLastDay = di === DAYS.length - 1;
 
-    HOUR_SLOTS.forEach((slot, si) => {
-      const isFirstSlot = si === 0;
-      const isLastSlot = si === SLEN - 1;
+    // 1. Recolectar Hitos
+    let timeSet = new Set([480, 1050]); // 08:00 and 17:30
+    STAGES.forEach(stage => {
+      stage.machines.forEach(machine => {
+        const blks = scheduledBlocks[machine]?.[di] || [];
+        blks.forEach(blk => {
+          timeSet.add(Math.round(blk.startMin));
+          timeSet.add(Math.round(blk.startMin + blk.duration));
+        });
+      });
+    });
+    
+    let timeBoundaries = Array.from(timeSet).sort((a,b) => a - b);
+    let skipRows = {};
+    ALL_MACHINES.forEach(m => skipRows[m] = 0);
+    
+    const SLEN = timeBoundaries.length - 1;
 
-      // Hour label cell — col 0, always present, sticky left:0
+    for (let r = 0; r < SLEN; r++) {
+      const startMin = timeBoundaries[r];
+      const isFirstSlot = r === 0;
+      const isLastSlot = r === SLEN - 1;
+      const stStr = mkTimeFromMins(startMin);
+
       const hourCell = `<td class="sched-td-hour" style="
         background:#7f1d1d; color:#fff;
         width:${HOUR_W}px; min-width:${HOUR_W}px; max-width:${HOUR_W}px;
@@ -906,9 +1096,9 @@ function renderCronogramaPorEtapa() {
         border-right:1px solid rgba(255,255,255,.15);
         border-bottom:${isLastSlot && !isLastDay ? '3px solid rgba(255,255,255,.2)' : '1px solid rgba(255,255,255,.08)'};
         font:600 11px 'Outfit',sans-serif; letter-spacing:.3px;
-      ">${slot.label}</td>`;
+        vertical-align: top; padding-top: 4px; text-align: center;
+      ">${stStr}</td>`;
 
-      // Day label cell — col 1, only on first slot per day, rowspan=SLEN, sticky left:HOUR_W
       const dayCell = isFirstSlot ? `<td rowspan="${SLEN}" class="sched-td-day" style="
         background:#991b1b;
         width:${DAY_W}px; min-width:${DAY_W}px; max-width:${DAY_W}px;
@@ -918,29 +1108,85 @@ function renderCronogramaPorEtapa() {
         box-shadow:2px 0 6px rgba(0,0,0,.08);
       "><div class="sched-day-inner">${day}</div></td>` : '';
 
-      // Machine data cells
       let machineCells = '';
       STAGES.forEach(stage => {
+        const isImpresion = stage.id === 'impresion';
         stage.machines.forEach((machine, mi) => {
           const isFirstOfStage = mi === 0;
-          const state = schedState.cells[machine]?.[di]?.[si] ?? '';
-          let bg = '#fff', inner = '', cursor = 'cursor:pointer;';
-          if (state === 'lunch') { bg = '#fffbf0'; cursor = 'cursor:default;'; }
-          else if (state === 'night') { bg = '#f5f3ff'; }
-          else if (state === 'work') { inner = `<span class="sched-chip" style="background:${stage.color};">✓</span>`; bg = '#fff1f2'; }
+          
+          if (skipRows[machine] > 0) {
+            skipRows[machine]--;
+            return;
+          }
 
-          const cellId = `c__${machine.replace(/[^a-zA-Z0-9]/g, '_')}__${di}__${si}`;
-          machineCells += `<td class="sched-cell${state === 'lunch' ? ' lunch-cell' : ''}${state === 'night' ? ' night-cell' : ''}"
-            id="${cellId}" data-machine="${escH(machine)}" data-day="${di}" data-slot="${si}"
-            style="width:${CELL_W}px;min-width:${CELL_W}px;background:${bg};${cursor}
-              border-bottom:${isLastSlot && !isLastDay ? '3px solid rgba(185,28,44,.2)' : '1px solid var(--border-color)'};
-              ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
-            ">${inner}</td>`;
+          if (isImpresion) {
+            const blks = scheduledBlocks[machine]?.[di] || [];
+            const activeBlk = blks.find(b => Math.round(b.startMin) === startMin);
+            
+            if (activeBlk) {
+              const endMin = Math.round(activeBlk.startMin + activeBlk.duration);
+              let span = 1;
+              for (let k = r + 1; k < timeBoundaries.length; k++) {
+                if (timeBoundaries[k] <= endMin) {
+                  span = k - r;
+                } else break;
+              }
+              skipRows[machine] = span - 1;
+              
+              const st = mkTimeFromMins(activeBlk.startMin);
+              const et = mkTimeFromMins(activeBlk.startMin + activeBlk.duration);
+              const durationStr = `(${Math.round(activeBlk.duration)} min)`;
+
+              let contentHtml = '';
+              let colorStyle = '';
+              
+              if (activeBlk.cssClass === 'block-c-prod') {
+                const titleArgs = `${escH(activeBlk.job.n)} - ${escH(activeBlk.job.producto || 'Producción')}`;
+                contentHtml = `
+                <div class="sched-task-card-row t-title">${titleArgs}</div>
+                <div class="sched-task-card-row t-sub">Línea: ${escH(activeBlk.job.linea || '-')} | Tirajes: ${escH(activeBlk.job.tirajes)} | Colores: ${escH(activeBlk.job.n_colores)}</div>
+                <div class="sched-task-card-row t-time">${st} - ${et} ${durationStr}</div>
+                `;
+                const bgCol = getColorByRMA(activeBlk.job.n);
+                colorStyle = `background: ${bgCol}; color: #fff; border: 1px solid rgba(0,0,0,0.1);`;
+              } else {
+                const titleText = activeBlk.cssClass === 'block-a-linea' ? 'CAMBIO DE LÍNEA + PREPARADO DE PINTURA' : 'CAMBIO DE PLACA + APROBACIÓN';
+                contentHtml = `
+                <div class="sched-task-card-row t-title">${titleText}</div>
+                <div class="sched-task-card-row t-time">${st} - ${et} ${durationStr}</div>
+                `;
+              }
+              
+              const cardClass = 'sched-task-card ' + activeBlk.cssClass;
+              
+              machineCells += `<td rowspan="${span}" class="sched-cell-impresion" style="
+                width:${CELL_W}px;min-width:${CELL_W}px; padding:4px; vertical-align:middle;
+                ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
+                border-bottom: 1px solid var(--border-color); background: #fdfdfd;
+              ">
+                <div class="${cardClass}" style="${colorStyle}">
+                  ${contentHtml}
+                </div>
+              </td>`;
+            } else {
+              machineCells += `<td class="sched-cell-impresion" style="
+                width:${CELL_W}px;min-width:${CELL_W}px; padding:0;
+                ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
+                border-bottom: 1px solid var(--border-color); background: #fdfdfd;
+              "></td>`;
+            }
+          } else {
+            machineCells += `<td class="sched-cell" style="
+                width:${CELL_W}px;min-width:${CELL_W}px;background:#fff;
+                border-bottom:${isLastSlot && !isLastDay ? '3px solid rgba(185,28,44,.2)' : '1px solid var(--border-color)'};
+                ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
+              "></td>`;
+          }
         });
       });
 
       body += `<tr>${hourCell}${dayCell}${machineCells}</tr>`;
-    });
+    }
 
     // Day separator row
     if (!isLastDay) {
