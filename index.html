@@ -59,11 +59,9 @@
                             <button class="btn-dots" id="btn-export-dots" title="Opciones de exportación">
                                 <i class="uil uil-ellipsis-v"></i>
                             </button>
-                            <div class="export-dropdown" id="export-dropdown">
-                                <button class="export-option" id="btn-export-excel">
-                                    <i class="uil uil-file-export"></i> Exportar a Excel
-                                </button>
-                            </div>
+                                <div class="export-dropdown" id="export-dropdown">
+                                    <button class="export-option" id="btn-export-excel">Exportar a Excel (.csv)</button>
+                                </div>
                         </div>
                     </div>
                 </div>
@@ -97,6 +95,14 @@
         <button class="ctx-item danger" id="ctx-delete-row">
             <i class="uil uil-trash-alt"></i> Eliminar fila
         </button>
+    </div>
+
+    <!-- Gantt Dynamic Modal -->
+    <div class="modal-overlay" id="gantt-modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close" id="gantt-modal-close" title="Cerrar">&times;</button>
+            <div id="gantt-modal-body"></div>
+        </div>
     </div>
 
     <script src="data.js"></script>

@@ -45,7 +45,7 @@ const STAGES = [
   { id: 'cortado', label: 'CORTADO', color: '#9f1239', machines: ['GUILLOTINA'] },
   { id: 'impresion', label: 'IMPRESIÓN', color: '#1e3a8a', machines: ['MOZP', 'SPEEDMASTER', 'GTO-52'] },
   { id: 'barnizado', label: 'BARNIZADO', color: '#14532d', machines: ['KORD 2', 'KORD 3'] },
-  { id: 'troquelado', label: 'TROQUELADO', color: '#4a1d96', machines: ['TROQ 57', 'TROQ 72', 'TROQ 77', 'TROQ MERCEDES'] },
+  { id: 'troquelado', label: 'TROQUELADO', color: '#4a1d96', machines: ['TROQUELADORA 57', 'TROQUELADORA 72', 'TROQUELADORA 77', 'TROQUELADORA MERCEDES'] },
   { id: 'pegado', label: 'PEGADO', color: '#7c2d12', machines: ['PEGADORA'] },
 ];
 const ALL_MACHINES = STAGES.flatMap(s => s.machines);
@@ -146,6 +146,12 @@ function getColorByRMA(rma) {
   return palette[Math.abs(hash) % palette.length];
 }
 
+function getCleanTroquelKey(val) {
+  const s = String(val || '').trim();
+  if (s === '' || s === '-' || s.toLowerCase() === 'null') return null;
+  return s;
+}
+
 // ─────────────────────────────────────────────────────────────
 //  CSV HELPERS
 // ─────────────────────────────────────────────────────────────
@@ -236,8 +242,11 @@ function setupKeyboard() {
 function changeZoom(delta, reset = false) {
   if (!['general', 'etapa'].includes(activeMenu)) return;
   scheduleZoom = reset ? 1 : Math.min(2.5, Math.max(0.3, scheduleZoom + delta));
-  const c = document.getElementById('schedule-table-container');
-  if (c) c.style.transform = `scale(${scheduleZoom})`;
+  
+  // Support both old and new architecture containers
+  const c = document.getElementById('gantt-root') || document.getElementById('schedule-table-container');
+  if (c) c.style.zoom = scheduleZoom;
+  
   const b = document.getElementById('zoom-badge-pct');
   if (b) b.textContent = Math.round(scheduleZoom * 100) + '%';
 }
@@ -348,6 +357,36 @@ function renderPlanificacion() {
       }
     });
   }
+
+  // Listener para navegación por teclado en la tabla
+  const tableContainer = document.getElementById('rma-list-container');
+  if (tableContainer) {
+    tableContainer.addEventListener('keydown', (e) => {
+      if (e.target.classList.contains('plan-maquina-input')) {
+        const idx = parseInt(e.target.getAttribute('data-idx'));
+        const total = rmaSessionList.length;
+
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          // Calcular el siguiente índice (si es el último, se queda en el mismo)
+          const nextIdx = (idx < total - 1) ? idx + 1 : idx;
+          cargarDatosTecnicos(nextIdx);
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (idx < total - 1) {
+            const nextInput = tableContainer.querySelector(`.plan-maquina-input[data-idx="${idx + 1}"]`);
+            if (nextInput) nextInput.focus();
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (idx > 0) {
+            const prevInput = tableContainer.querySelector(`.plan-maquina-input[data-idx="${idx - 1}"]`);
+            if (prevInput) prevInput.focus();
+          }
+        }
+      }
+    });
+  }
 }
 
 const SPECIAL_COD_IFAS = [
@@ -364,7 +403,7 @@ function renderRMATable() {
             </div>`;
   }
 
-  const rowsHtml = rmaSessionList.map(item => {
+  const rowsHtml = rmaSessionList.map((item, index) => {
     const isLoaded = item.ciclos !== undefined;
     return `
       <tr data-rma="${item.n}">
@@ -378,9 +417,9 @@ function renderRMATable() {
         <td>${item.n_colores || '-'}</td>
         <td>
           <input type="text" class="plan-maquina-input" 
+                 data-idx="${index}"
                  value="${item.maquina || ''}" 
                  oninput="updateRmaMaquina('${item.n}', this.value, this)"
-                 onblur="cargarDatosTecnicos()"
                  placeholder="M, S, G..."
                  onclick="event.stopPropagation()">
         </td>
@@ -444,10 +483,7 @@ function renderRMATable() {
         </div>
       </div>
       <div class="footer-right">
-        <button class="btn-cargar-datos" onclick="cargarDatosTecnicos()">
-          <i class="uil uil-sync"></i> CARGAR
-        </button>
-        <button class="btn-generar-crono" onclick="generarCronogramaEtapa()" style="margin-left:8px;background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:7px;">
+        <button class="btn-generar-crono" onclick="generarCronogramaEtapa()" style="background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:7px;">
           <i class="uil uil-calendar-alt"></i> GENERAR CRONOGRAMA
         </button>
       </div>
@@ -480,7 +516,7 @@ function updateRmaMaquina(rmaN, val, inputEl) {
 }
 
 
-async function cargarDatosTecnicos() {
+async function cargarDatosTecnicos(refocusIdx = null) {
   if (rmaSessionList.length === 0) return;
   
   if (!supabaseClient) {
@@ -497,7 +533,7 @@ async function cargarDatosTecnicos() {
     const { data, error } = await supabaseClient
 
       .from('bt_imprenta')
-      .select('codigo, n_troquel, cajas_por_tiraje, tirajes_por_pliego, maquina_preferencial')
+      .select('codigo, n_troquel, cajas_por_tiraje, tirajes_por_pliego, maquina_preferencial, codigo_2')
       .in('codigo', codigos);
 
     if (error) throw error;
@@ -534,6 +570,7 @@ async function cargarDatosTecnicos() {
       // Datos Base de BT
       item.n_troquel = btData?.n_troquel || '-';
       item.un_tiraje = btData?.cajas_por_tiraje || '-';
+      item.codigo_2 = btData?.codigo_2 || '';
       
       const tirajesPliego = parseFloat(btData?.tirajes_por_pliego);
 
@@ -548,10 +585,10 @@ async function cargarDatosTecnicos() {
         if (maq === 'GTO-52') divisor = 4;
 
         let ciclos = Math.ceil(nColores / divisor);
-
+        
         // Validación robusta de SOBRES
-        const mat = (item.material_requerido || '').trim().toUpperCase();
-        if (mat === 'SOBRE' || mat === 'SOBRES') {
+        const mat = (item.material_requerido || '').toUpperCase();
+        if (mat.includes('SOBRE')) {
           ciclos += 1;
         }
         item.ciclos = ciclos;
@@ -574,10 +611,23 @@ async function cargarDatosTecnicos() {
       }
     });
 
-
-
     const container = document.getElementById('rma-list-container');
-    if (container) container.innerHTML = renderRMATable();
+    if (container) {
+      container.innerHTML = renderRMATable();
+      
+      if (refocusIdx !== null) {
+        setTimeout(() => {
+          const nextInput = container.querySelector(`.plan-maquina-input[data-idx="${refocusIdx}"]`);
+          if (nextInput) {
+            nextInput.focus();
+            // Move cursor to the end
+            const val = nextInput.value;
+            nextInput.value = '';
+            nextInput.value = val;
+          }
+        }, 0);
+      }
+    }
     showSaveToast("Cálculos completados");
   } catch (err) {
     console.error("Error en carga técnica v4:", err);
@@ -682,9 +732,14 @@ function buildDateBarHTML(viewId) {
       <div style="display:flex;align-items:center;gap:6px;">
         ${fsBtn}
         <div class="sched-export-wrap">
-          <button class="sched-export-btn" id="sched-export-btn-${viewId}" title="Exportar"><i class="uil uil-ellipsis-h"></i></button>
+          <button class="sched-export-btn" id="sched-export-btn-${viewId}" title="Opciones"><i class="uil uil-ellipsis-v"></i></button>
           <div class="sched-export-dropdown" id="sched-export-dd-${viewId}">
-            <button class="export-option" id="sched-export-excel-${viewId}"><i class="uil uil-file-export"></i> Exportar a Excel (.csv)</button>
+            <button class="export-option" id="sched-export-excel-${viewId}">Exportar a Excel (.csv)</button>
+            ${viewId === 'eta' ? `
+              <div class="export-divider"></div>
+              <button class="export-option" data-action="lunch">Definir hora de almuerzo</button>
+              <button class="export-option" data-action="night">Horario nocturno</button>
+            ` : ''}
           </div>
         </div>
       </div>
@@ -704,6 +759,17 @@ function wireDateBar(viewId, exportFn) {
   }
   const excelBtn = document.getElementById(`sched-export-excel-${viewId}`);
   if (excelBtn) excelBtn.addEventListener('click', () => { dd?.classList.remove('open'); exportFn(); });
+
+  // Event Delegation for config options
+  if (viewId === 'eta' && dd) {
+    dd.addEventListener('click', e => {
+      const btn = e.target.closest('.export-option');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'lunch') { dd.classList.remove('open'); showGanttModal('lunch'); }
+      if (action === 'night') { dd.classList.remove('open'); showGanttModal('night'); }
+    });
+  }
 }
 
 function wireFullscreenBtn() {
@@ -859,6 +925,172 @@ function mkTimeFromMins(min) {
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 
+// ─────────────────────────────────────────────────────────────
+//  LOGICA FASE 1: AGRUPAMIENTO Y CICLOS
+// ─────────────────────────────────────────────────────────────
+function normalizeColors(s) {
+  if (!s || typeof s !== 'string') return '';
+  return Array.from(s.replace(/\s+/g, '').toUpperCase()).sort().join('');
+}
+
+function isValidColorCode(s) {
+  if (!s || typeof s !== 'string') return false;
+  const clean = s.trim();
+  return clean !== '' && clean !== '-';
+}
+
+function getColorsPerCycle(colors, bodies) {
+  if (!colors) return [];
+  const chars = Array.from(colors.replace(/\s+/g, '').toUpperCase());
+  const cycles = [];
+  for (let i = 0; i < chars.length; i += bodies) {
+    cycles.push(chars.slice(i, i + bodies).join(''));
+  }
+  return cycles;
+}
+
+function buildScheduleLogicStructure(queues) {
+  const structure = {
+    'SPEEDMASTER': {},
+    'MOZP': {},
+    'GTO-52': {}
+  };
+
+  const machines = ['SPEEDMASTER', 'MOZP', 'GTO-52'];
+  
+  machines.forEach(machine => {
+    const bodies = (machine === 'GTO-52') ? 4 : 2;
+    const queue = queues[machine] || [];
+    const groupsByLinea = {};
+
+    queue.forEach(job => {
+      const linea = job.linea || 'SIN LINEA';
+      if (!groupsByLinea[linea]) groupsByLinea[linea] = {};
+
+      // Match con bt_imprenta (Match: COD-IFA -> código)
+      // Normalización robusta para nombres de columna y valores
+      const btRows = DATA.btImprenta.rows || [];
+      let excludeReason = '';
+      const match = btRows.find(r => {
+        const btCode = String(r['codigo'] || r['código'] || r['CÓDIGO'] || '').trim().toUpperCase();
+        const planCode = String(job.codigo_material || '').trim().toUpperCase();
+        return btCode === planCode && btCode !== '';
+      });
+
+      if (!match) excludeReason = 'IFA no encontrado en bt_imprenta';
+      
+      const originalColors = match ? (match['codigo_2'] || match['código_2'] || match['CÓDIGO_2'] || '') : '';
+      const valid = isValidColorCode(originalColors);
+      
+      if (match && !valid) excludeReason = 'código_2 vacío o inválido (-)';
+      
+      const normalized = valid ? normalizeColors(originalColors) : 'INVALIDO';
+      const cycles = valid ? getColorsPerCycle(originalColors, bodies) : [];
+
+      if (!groupsByLinea[linea][normalized]) {
+        groupsByLinea[linea][normalized] = {
+          normalizedColors: normalized,
+          items: []
+        };
+      }
+
+      groupsByLinea[linea][normalized].items.push({
+        // Identificadores base
+        rma: job.n,
+        product: job.producto,
+        ifa: job.codigo_material,
+
+        // Campos originales restaurados (Nombres íntegros de Planificación)
+        presentacion_comercial: job.presentacion_comercial,
+        material_requerido: job.material_requerido,
+        cantidad_requerida_para_cubrir: job.cantidad_requerida_para_cubrir,
+        linea: job.linea,
+        n_colores: job.n_colores,
+        maquina: job.maquina,
+        n_troquel: job.n_troquel,
+        un_tiraje: job.un_tiraje,
+        ciclos: job.ciclos,
+        tirajes: job.tirajes,
+
+        // Datos técnicos calculados
+        originalColors: originalColors,
+        normalizedColors: normalized,
+        cycles: cycles,
+        numCycles: cycles.length,
+        bodies: bodies,
+        isValid: valid,
+        excludeReason: excludeReason,
+
+        // Referencia completa
+        jobRef: job
+      });
+    });
+
+    structure[machine] = groupsByLinea;
+  });
+
+  return structure;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  COLOR IDENTITY SYSTEM (Hybrid: Palette + Deterministic Variants)
+// ─────────────────────────────────────────────────────────────
+
+const EXEC_PALETTE_HSL = [
+  [210, 55, 52], [120, 45, 50], [15, 60, 55],  [215, 30, 50], [281, 45, 52],
+  [180, 50, 48], [38, 65, 58],  [243, 50, 54], [200, 60, 56], [342, 60, 58],
+  [84, 45, 48],  [210, 25, 55], [263, 40, 56], [10, 65, 60],  [160, 50, 52],
+  [50, 40, 55],  [250, 45, 60], [20, 70, 62],  [190, 65, 50], [30, 30, 50]
+];
+
+/**
+ * Deterministic hash for any string (DJB2)
+ */
+function getHash(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+  }
+  return Math.abs(hash);
+}
+
+/**
+ * Returns a consistent, professional color for an RMA with adaptive contrast.
+ * Threshold: 56% L for switching to black text.
+ */
+function getColorInfoByRMA(rma) {
+  const s = String(rma || '').trim();
+  if (!s) return { bg: '#f3f4f6', text: '#374151' };
+
+  const hash = getHash(s);
+  const baseIdx = hash % EXEC_PALETTE_HSL.length;
+  const base = EXEC_PALETTE_HSL[baseIdx];
+
+  // Variation: 0: normal, 1: -6% Lightness, 2: +6% Lightness
+  const variant = Math.floor(hash / EXEC_PALETTE_HSL.length) % 3;
+  
+  let [h, sat, lum] = base;
+
+  if (variant === 1) { // Lighter
+    lum = Math.min(65, lum + 6);
+  } else if (variant === 2) { // Darker
+    lum = Math.max(35, lum - 6);
+  }
+
+  // PROTECTION: Avoid being exactly on the 55-57% threshold
+  if (lum >= 55 && lum <= 57) {
+    lum = (variant === 1) ? 58 : 54;
+  }
+
+  const bg = `hsl(${h}, ${sat}%, ${lum}%)`;
+  const text = (lum >= 56) ? '#111827' : '#ffffff'; // Contrast validation
+
+  return { bg, text };
+}
+
+// Deprecated wrapper for backward compatibility if needed elsewhere
+function getColorByRMA(rma) { return getColorInfoByRMA(rma).bg; }
+
 async function generarCronogramaEtapa() {
   if (rmaSessionList.length === 0) {
     showSaveToast("Agrega RMAs en Planificación primero");
@@ -877,6 +1109,7 @@ async function generarCronogramaEtapa() {
     if (error) throw error;
     
     ALL_MACHINES.forEach(m => scheduledBlocks[m] = {});
+    const rmaFinishTracker = {}; // Para controlar la dependencia de Barnizado: { [rma]: absMins }
     
     const queues = {};
     ALL_MACHINES.forEach(m => queues[m] = []);
@@ -888,12 +1121,36 @@ async function generarCronogramaEtapa() {
       if (mqKey) queues[mqKey].push(item);
     });
 
+    // FASE 1: Construir estructura lógica intermedia
+    const logicBase = buildScheduleLogicStructure(queues);
+    window.cronogramaLogicBase = logicBase;
+    console.log("FASE 1: Estructura lógica construida:", logicBase);
+    
+    // Resumen simplificado para validación en consola
+    const summary = [];
+    ['SPEEDMASTER', 'MOZP', 'GTO-52'].forEach(m => {
+      Object.keys(logicBase[m]).forEach(l => {
+        Object.keys(logicBase[m][l]).forEach(c => {
+          const group = logicBase[m][l][c];
+          summary.push({
+            Máquina: m,
+            Línea: l,
+            SetColores: c,
+            Productos: group.items.map(i => i.rma).join(', '),
+            Validos: group.items.filter(i => i.isValid).length,
+            Invalidos: group.items.filter(i => !i.isValid).length
+          });
+        });
+      });
+    });
+    if (summary.length > 0) console.table(summary);
+
     ['SPEEDMASTER', 'MOZP', 'GTO-52'].forEach(machine => {
-      if (!queues[machine] || queues[machine].length === 0) return;
+      const groupsByLinea = logicBase[machine] || {};
+      if (Object.keys(groupsByLinea).length === 0) return;
       
       let cursorDay = 0;
       let cursorMin = TURNO_INICIO;
-      let lastRowLinea = null;
       
       const mqTiempos = tiemposData.find(t => {
         const maqt = (t.maquina || '').toUpperCase().replace(/\s|-/g, '');
@@ -901,10 +1158,11 @@ async function generarCronogramaEtapa() {
         return maqt === mac;
       }) || {};
 
-      function addBlock(duration, type, job, details, customClass) {
+      function addBlock(duration, type, job, details, customClass, extraData = null) {
+        if (duration <= 0) return;
         let remaining = duration;
         let iter = 0;
-        while (remaining > 0 && iter < 50) {
+        while (remaining > 0 && iter < 100) {
           iter++;
           const availableInDay = TURNO_FIN - cursorMin;
           const chunk = Math.min(remaining, availableInDay);
@@ -919,7 +1177,8 @@ async function generarCronogramaEtapa() {
             type: type,
             job: job,
             details: details,
-            cssClass: customClass || ''
+            cssClass: customClass || '',
+            extraData: extraData
           });
           
           cursorMin += chunk;
@@ -932,51 +1191,397 @@ async function generarCronogramaEtapa() {
         }
       }
 
-      queues[machine].forEach((job, index) => {
-        const cuerposImp = parseFloat(job.n_colores) || 0; 
-        const tirajes = parseFloat(job.tirajes) || 0;
+        // 1. Iterar por Línea
+        const sortedLineas = Object.keys(groupsByLinea).sort();
+        sortedLineas.forEach(lineaName => {
+          const colorGroups = groupsByLinea[lineaName];
+          
+          // 2. Ordenar Grupos de Colores por complejidad (cantidad de colores únicos)
+          const sortedColorSets = Object.keys(colorGroups).sort((a, b) => {
+            if (a === 'INVALIDO') return 1;
+            if (b === 'INVALIDO') return -1;
+            return b.length - a.length;
+          });
+
+          sortedColorSets.forEach(colorSet => {
+            if (colorSet === 'INVALIDO') return; // Excluir productos inválidos del cronograma
+
+            const group = colorGroups[colorSet];
+            const validItems = group.items.filter(i => i.isValid);
+            if (validItems.length === 0) return;
+
+            // 3. Validar consistencia de ciclos en el grupo
+            const cycleCounts = validItems.map(i => i.numCycles);
+            const maxCycles = Math.max(...cycleCounts);
+            const allSame = cycleCounts.every(c => c === maxCycles);
+            
+            if (!allSame) {
+              console.warn(`Advertencia: Ciclos inconsistentes en el grupo ${colorSet} de la línea ${lineaName}. Se usará maxCycles=${maxCycles}.`);
+            }
+
+            // 4. Renderizado por Ciclos
+            for (let c = 0; c < maxCycles; c++) {
+              validItems.forEach((item, itemIdx) => {
+                // Protección: Si el producto no tiene este ciclo (grupos heterogéneos), omitir
+                if (!item.cycles[c]) return;
+
+                const job = item.jobRef;
+                const nColoresCiclo = item.cycles[c].length; // Cuerpos activos en este ciclo
+                const tirajes = parseFloat(job.tirajes) || 0;
+
+                // Tiempos Técnicos
+                const washBase = parseFloat(mqTiempos.cambio_color_lavado_rod_tin_x_cuerpo) || 0;
+                const prepBase = parseFloat(mqTiempos.preparado_de_tinta_x_cuerpo) || 0;
+                const plateBase = parseFloat(mqTiempos.cambio_placa_por_cuerpo) || 0;
+                const aprobacion = parseFloat(mqTiempos.aprobacion) || 0;
+                const valorProm = parseFloat(mqTiempos.valor_prom) || 1;
+
+                const timeWash = washBase * nColoresCiclo;
+                const timePrep = prepBase * nColoresCiclo;
+                const timePlate = (plateBase * nColoresCiclo) + aprobacion;
+                const timeProd = (tirajes / valorProm) * 60;
+
+                // Texto del ciclo para el bloque de producción
+                const cycleLabel = `Ciclo ${c + 1}/${item.numCycles}`;
+                const colorsLabel = `Colores actual: ${item.cycles[c]}`;
+
+                // Bloques de Preparación (Solo para el primer producto de CADA ciclo)
+                if (itemIdx === 0) {
+                  addBlock(timeWash, 'LAVADO DE RODILLOS Y TINTEROS', job, `${timeWash.toFixed(0)} min | ${colorsLabel}`, 'block-a-wash');
+                  addBlock(timePrep, 'PREPARADO DE PINTURA', job, `${timePrep.toFixed(0)} min | ${colorsLabel}`, 'block-a-prep');
+                }
+
+                // Bloque de Placa + Aprobación (Para todos los productos en cada ciclo)
+                addBlock(timePlate, 'CAMBIO DE PLACA + APROBACIÓN', job, `${timePlate.toFixed(0)} min | ${nColoresCiclo} cuerpos`, 'block-b-placa');
+
+                // Bloque de Producción (Se repite íntegro por ciclo)
+                const detailsProd = `${cycleLabel} | Línea: ${job.linea || '-'} | Tirajes: ${tirajes}`;
+                addBlock(timeProd, job.producto || 'Producción', job, detailsProd, 'block-c-prod', {
+                  cycleLabel: cycleLabel,
+                  currentCycle: c + 1,
+                  totalCycles: maxCycles,
+                  codigo_2: item.originalColors
+                });
+
+                // Registrar Fin de Impresión para este RMA
+                const absFinish = (cursorDay * 1440) + cursorMin;
+                const rKey = String(job.n).trim();
+                if (!rmaFinishTracker[rKey] || absFinish > rmaFinishTracker[rKey]) {
+                  rmaFinishTracker[rKey] = absFinish;
+                }
+              });
+            }
+          });
+        });
+      });
+
+      console.log("FASE 2: Empezando etapa de Barnizado. RMAs con fin de impresión:", Object.keys(rmaFinishTracker));
+
+      // --- ETAPA 2: BARNIZADO (Motor de Optimización por Troquel) ---
+      const machinesBarnizado = ['KORD 2', 'KORD 3'];
+      const barnizadoTrackers = {}; 
+      const barnizadoJobFinishTracker = {}; // { [rma]: absMin }
+      machinesBarnizado.forEach(m => {
+        barnizadoTrackers[m] = { day: 0, min: TURNO_INICIO, lastTroquel: null };
+      });
+
+      console.log('[DEBUG-BALANCER] DISPONIBILIDAD INICIAL:', JSON.stringify(barnizadoTrackers));
+
+      // Cola de trabajo (referencia a objetos originales con metadatos de liberación)
+      let pendingBarnizado = rmaSessionList
+        .map((job, idx) => ({ 
+          job: job, 
+          originalIndex: idx, 
+          liberationTime: rmaFinishTracker[String(job.n)] 
+        }))
+        .filter(item => item.liberationTime !== undefined);
+
+      let barnizadoIteration = 0;
+      while (pendingBarnizado.length > 0 && barnizadoIteration < 500) {
+        barnizadoIteration++;
+
+        // 1. Encontrar la máquina que se libera antes
+        let targetMachine = 'KORD 2';
+        let minAvailAbs = Infinity;
+        machinesBarnizado.forEach(m => {
+          const t = barnizadoTrackers[m];
+          const abs = (t.day * 1440) + t.min;
+          if (abs < minAvailAbs) {
+            minAvailAbs = abs;
+            targetMachine = m;
+          }
+        });
+
+        const tracker = barnizadoTrackers[targetMachine];
+        const machineAvail = (tracker.day * 1440) + tracker.min;
+
+        // 2. Buscar en tiemposData los parámetros de esta máquina
+        const mqTiempos = tiemposData.find(t => {
+          const maqt = (t.maquina || '').toUpperCase().replace(/\s|-/g, '');
+          const mac  = targetMachine.toUpperCase().replace(/\s|-/g, '');
+          return maqt === mac;
+        });
+
+        if (!mqTiempos) break; 
+
+        const baseCambio = parseFloat(mqTiempos.cambio_formato) || 0;
+        const valorProm = Number(mqTiempos.valor_prom) || 1;
+
+        // 3. Evaluar cada RMA pendiente para esta máquina específica
+        let bestScore = Infinity;
+        let winnerIdx = -1;
+        let bestWait = 0;
+        let bestSetup = 0;
+
+        pendingBarnizado.forEach((cand, idx) => {
+          const wait = Math.max(0, cand.liberationTime - machineAvail);
+          
+          // Optimización por Troquel: si coincide el troquel, el cambio es 0
+          const setup = (String(cand.job.n_troquel).trim() === String(tracker.lastTroquel).trim() && tracker.lastTroquel !== null) ? 0 : baseCambio;
+          
+          const score = wait + setup;
+
+          if (score < bestScore) {
+            bestScore = score;
+            winnerIdx = idx;
+            bestWait = wait;
+            bestSetup = setup;
+          }
+        });
+
+        if (winnerIdx === -1) break;
+
+        const item = pendingBarnizado.splice(winnerIdx, 1)[0];
+        const job = item.job;
+        const liberationTime = item.liberationTime;
+
+        console.log(`[DEBUG-TROQUEL] Máquina: ${targetMachine} | lastTroquel: ${tracker.lastTroquel} | Ganador: RMA ${job.n} (Troquel: ${job.n_troquel}) | Espera: ${bestWait}m | Cambio: ${bestSetup}m | Score: ${bestScore}`);
+
+        // 4. Asignar Bloques (Cambio y Producción)
+        let cursorDay = Math.floor(Math.max(liberationTime, machineAvail) / 1440);
+        let cursorMin = Math.max(liberationTime, machineAvail) % 1440;
+        const machine = targetMachine;
+
+        function addBlockBarnizado(duration, type, job, details, customClass, extraData = null) {
+          if (duration <= 0) return;
+          let remaining = duration;
+          let iter = 0;
+          const startDayLog = cursorDay;
+          const startMinLog = cursorMin;
+          while (remaining > 0 && iter < 100) {
+            iter++;
+            const availableInDay = TURNO_FIN - cursorMin;
+            const chunk = Math.min(remaining, availableInDay);
+            if (!scheduledBlocks[machine][cursorDay]) scheduledBlocks[machine][cursorDay] = [];
+            scheduledBlocks[machine][cursorDay].push({
+              startMin: cursorMin, duration: chunk, type: type, job: job, details: details,
+              cssClass: customClass || '', extraData: extraData
+            });
+            cursorMin += chunk; remaining -= chunk;
+            if (cursorMin >= TURNO_FIN && remaining > 0) { cursorDay++; cursorMin = TURNO_INICIO; }
+          }
+          console.log(`[DEBUG-BARNIZADO] INSERCIÓN: ${machine} | Tipo: ${type} | RMA: ${job.n} | Inicio: D${startDayLog} ${mkTimeFromMins(startMinLog)} | Fin: D${cursorDay} ${mkTimeFromMins(cursorMin)} | Dur: ${Math.round(duration)} min`);
+        }
+
+        if (bestSetup > 0) {
+          addBlockBarnizado(bestSetup, 'CAMBIO DE FORMATO', job, 'Cambio de Formato Barnizado', 'block-c-formato');
+        }
+
+        const tj = Number(job.tirajes) || 0;
+        const durProd = Math.ceil((tj / valorProm) * 60);
         
-        const wash = parseFloat(mqTiempos.cambio_color_lavado_rod_tin_x_cuerpo) || 0;
-        const prep = parseFloat(mqTiempos.preparado_de_tinta_x_cuerpo) || 0;
-        const paramL = (wash + prep) * cuerposImp;
+        if (durProd > 0) {
+          addBlockBarnizado(durProd, job.producto || 'Barnizado', job, `Barnizado - ${job.producto}`, 'block-c-prod', { isBarnizado: true });
+          console.log('[OK BARNIZADO]', { rma: job.n, valor_prom: valorProm, tirajes: tj, duracion: durProd });
+        }
+
+        tracker.day = cursorDay;
+        tracker.min = cursorMin;
+        tracker.lastTroquel = job.n_troquel;
         
-        const placaCuerpo = parseFloat(mqTiempos.cambio_placa_por_cuerpo) || 0;
-        const aprobacion = parseFloat(mqTiempos.aprobacion) || 0;
-        const paramP = (placaCuerpo * cuerposImp) + aprobacion;
-        
-        const valorProm = parseFloat(mqTiempos.valor_prom) || 1; 
-        const paramC = (tirajes / valorProm) * 60;
-        
-        if (index === 0 || job.linea !== lastRowLinea) {
-          if (paramL > 0) {
-             addBlock(paramL, 'Cambio de línea + Preparado', job, `${paramL.toFixed(0)} min`, 'block-a-linea');
+        // Registrar Fin de Barnizado para este RMA
+        barnizadoJobFinishTracker[String(job.n).trim()] = (cursorDay * 1440) + cursorMin;
+      }
+
+      // --- ETAPA 3: TROQUELADO (Motor de Optimización por Troquel y Recursos Globales) ---
+      const machinesTroquelado = ['TROQUELADORA 57', 'TROQUELADORA 72', 'TROQUELADORA 77', 'TROQUELADORA MERCEDES'];
+      const troqueladoTrackers = {}; 
+      const troquelGlobalTracker = {}; // { [n_troquel]: absMinFree }
+      
+      machinesTroquelado.forEach(m => {
+        troqueladoTrackers[m] = { day: 0, min: TURNO_INICIO, lastTroquel: null };
+      });
+
+      console.log('FASE 3: Empezando etapa de Troquelado. RMAs con fin de barnizado:', Object.keys(barnizadoJobFinishTracker));
+
+      let pendingTroquelado = rmaSessionList
+        .filter(rma => {
+          const ut = parseFloat(rma.un_tiraje);
+          const isValid = !isNaN(ut) && ut > 0;
+          if (!isValid) console.warn("[TROQUELADO] RMA omitido por UN/TIRAJE inválido", { rma: rma.n, UN_TIRAJE: rma.un_tiraje });
+          return isValid;
+        })
+        .map((job, idx) => ({ 
+          job: job, 
+          originalIndex: idx, 
+          barnizadoFinish: barnizadoJobFinishTracker[String(job.n).trim()] || 0
+        }));
+
+      let troqueladoIteration = 0;
+      while (pendingTroquelado.length > 0 && troqueladoIteration < 500) {
+        troqueladoIteration++;
+
+        // 1. Encontrar la máquina que se libera antes
+        let targetMachine = null;
+        let minAvailAbs = Infinity;
+        machinesTroquelado.forEach(m => {
+          const t = troqueladoTrackers[m];
+          const abs = (t.day * 1440) + t.min;
+          if (abs < minAvailAbs) {
+            minAvailAbs = abs;
+            targetMachine = m;
+          }
+        });
+
+        if (!targetMachine) break;
+        const tracker = troqueladoTrackers[targetMachine];
+        const machineAvail = (tracker.day * 1440) + tracker.min;
+
+        // 2. Buscar en tiemposData los parámetros de esta máquina (Match Exacto)
+        const mqTiempos = tiemposData.find(t => {
+          return (t.maquina || '').toUpperCase().trim() === targetMachine.toUpperCase().trim();
+        });
+
+        if (!mqTiempos) {
+          console.error(`[TROQUELADO] No se encontraron tiempos para la máquina: ${targetMachine}`);
+          troqueladoTrackers[targetMachine].min = TURNO_FIN; 
+          continue;
+        }
+
+        // 3. Evaluar cada RMA pendiente para esta máquina con jerarquía de desempate
+        let bestScore = Infinity;
+        let winnerIdx = -1;
+
+        pendingTroquelado.forEach((cand, idx) => {
+          const tKey = getCleanTroquelKey(cand.job.n_troquel);
+          const troquelAvail = tKey ? (troquelGlobalTracker[tKey] || 0) : 0;
+          const wait = Math.max(0, cand.barnizadoFinish - machineAvail, troquelAvail - machineAvail);
+          
+          const isSameTroquel = String(cand.job.n_troquel).trim() === String(tracker.lastTroquel).trim() && tracker.lastTroquel !== null;
+          const setup = isSameTroquel ? 0 : (parseFloat(mqTiempos.cambio_troquel) || 0);
+          
+          const score = wait + setup;
+
+          if (score < bestScore) {
+            bestScore = score;
+            winnerIdx = idx;
+          } else if (score === bestScore && winnerIdx !== -1) {
+            // Desempate 1: Priorizar mismo troquel
+            const winnerCand = pendingTroquelado[winnerIdx];
+            const winnerIsSame = String(winnerCand.job.n_troquel).trim() === String(tracker.lastTroquel).trim();
+            const candIsSame = isSameTroquel;
+
+            if (candIsSame && !winnerIsSame) {
+              winnerIdx = idx;
+            } else if (candIsSame === winnerIsSame) {
+              // Desempate 2: FIFO (Orden original)
+              if (cand.originalIndex < winnerCand.originalIndex) {
+                winnerIdx = idx;
+              }
+            }
+          }
+        });
+
+        if (winnerIdx === -1) break;
+
+        const item = pendingTroquelado.splice(winnerIdx, 1)[0];
+        const job = item.job;
+        const tKey = getCleanTroquelKey(job.n_troquel);
+        const troquelAvail = tKey ? (troquelGlobalTracker[tKey] || 0) : 0;
+
+        // 4. Asignar Bloques - FÓRMULA EXACTA: Math.max(machineAvail, barnizadoFinish, troquelAvail)
+        const startTimeAbs = Math.max(machineAvail, item.barnizadoFinish, troquelAvail);
+        let cursorDay = Math.floor(startTimeAbs / 1440);
+        let cursorMin = startTimeAbs % 1440;
+        const machine = targetMachine;
+
+        function addBlockTroquel(duration, type, job, details, customClass, extraData = null) {
+          if (duration <= 0) return;
+          let remaining = duration;
+          let iter = 0;
+          while (remaining > 0 && iter < 100) {
+            iter++;
+            const availableInDay = TURNO_FIN - cursorMin;
+            const chunk = Math.min(remaining, availableInDay);
+            if (!scheduledBlocks[machine][cursorDay]) scheduledBlocks[machine][cursorDay] = [];
+            scheduledBlocks[machine][cursorDay].push({
+              startMin: cursorMin, duration: chunk, type: type, job: job, details: details,
+              cssClass: customClass || '', extraData: extraData
+            });
+            cursorMin += chunk; remaining -= chunk;
+            if (cursorMin >= TURNO_FIN && remaining > 0) { cursorDay++; cursorMin = TURNO_INICIO; }
           }
         }
-        lastRowLinea = job.linea;
-        
-        if (paramP > 0) {
-           addBlock(paramP, 'Cambio de placa + Aprobación', job, `${paramP.toFixed(0)} min`, 'block-b-placa');
-        }
-        
-        if (paramC > 0) {
-           let detailsC = `Línea: ${job.linea || '-'} | Tirajes: ${tirajes} | Colores: ${cuerposImp}`;
-           addBlock(paramC, job.producto || 'Producción', job, detailsC, 'block-c-prod');
-        }
-      });
-    });
-    
-    if (activeMenu !== 'etapa') {
-      selectMenu('etapa');
-    } else {
-      renderCronogramaPorEtapa();
-    }
-    showSaveToast("Cronograma calculado exitosamente");
 
-  } catch (err) {
-    console.error("Error generating cronograma:", err);
-    showSaveToast("Error al generar cronograma");
+        // Tiempos Técnicos
+        const isSameTroquel = String(job.n_troquel).trim() === String(tracker.lastTroquel).trim() && tracker.lastTroquel !== null;
+        const tCambio = isSameTroquel ? 0 : (parseFloat(mqTiempos.cambio_troquel) || 0);
+        const tRegulado = parseFloat(mqTiempos.regulado_troquel) || 0;
+        const tAprob = parseFloat(mqTiempos.aprobacion) || 0;
+        const ut = parseFloat(job.un_tiraje) || 0;
+        
+        let tRegEsp = 0;
+        let isMissingRegEsp = false;
+        if (ut >= 6) {
+          tRegEsp = parseFloat(mqTiempos.regulado_especial) || 0;
+          if (tRegEsp === 0) isMissingRegEsp = true;
+        }
+
+        const vProm = parseFloat(mqTiempos.valor_prom) || 1;
+        const tj = parseFloat(job.tirajes) || 0;
+        const tProd = Math.ceil((tj / vProm) * 60);
+
+        // Ejecutar Secuencia Técnica (Troquel bloqueado desde el inicio de la secuencia)
+        if (tCambio > 0) addBlockTroquel(tCambio, 'CAMBIO DE TROQUEL', job, 'Preparación', 'block-troq-setup');
+        addBlockTroquel(tRegulado, 'REGULADO TROQUEL', job, 'Regulado', 'block-troq-setup');
+        addBlockTroquel(tAprob, 'APROBACIÓN', job, 'Aprobación', 'block-troq-setup');
+
+        if (ut >= 6) {
+          if (isMissingRegEsp) {
+            addBlockTroquel(5, '[!] FALTA TIEMPO REGULADO ESPECIAL', job, `RMA: ${job.n} | MAQUINA: ${machine}`, 'block-error-data');
+          } else {
+            addBlockTroquel(tRegEsp, 'REGULADO ESPECIAL', job, 'Regulado Especial', 'block-troq-setup');
+          }
+        }
+
+        if (tProd > 0) {
+          addBlockTroquel(tProd, job.producto || 'Troquelado', job, `Tirajes: ${job.tirajes} | UN/TIRAJE: ${job.un_tiraje}`, 'block-c-prod', { isTroquelado: true });
+        }
+
+        // Actualizar trackers
+        const absFinish = (cursorDay * 1440) + cursorMin;
+        tracker.day = cursorDay;
+        tracker.min = cursorMin;
+        tracker.lastTroquel = job.n_troquel;
+        
+        // Bloqueo exclusivo: el troquel queda liberado SOLO después de fin de producción
+        if (tKey) {
+          troquelGlobalTracker[tKey] = absFinish;
+        }
+      }
+      
+      if (activeMenu !== 'etapa') {
+        selectMenu('etapa');
+      } else {
+        renderCronogramaPorEtapa();
+      }
+      showSaveToast("Cronograma calculado exitosamente");
+
+    } catch (err) {
+      console.error("Error generating cronograma:", err);
+      showSaveToast("Error al generar cronograma");
+    }
   }
-}
 
 // ─────────────────────────────────────────────────────────────
 //  CRONOGRAMA POR ETAPA
@@ -989,296 +1594,303 @@ async function generarCronogramaEtapa() {
 // ─────────────────────────────────────────────────────────────
 function renderCronogramaPorEtapa() {
   scheduleZoom = 1;
-  const SLEN = HOUR_SLOTS.length; // 11
+  const HOUR_W = 75, DAY_W = 30, CELL_W = 189, ROW_H = 40, HR1_H = 38, HR2_H = 52;
 
-  const DAY_W = 46;   // day label column px
-  const HOUR_W = 68;   // hour label column px
-  const CELL_W = 90;   // machine cell width px (wider for readability)
-  const HR1_H = 38;   // stage group header row height px
-  const HR2_H = 52;   // machine name header height px (horizontal text)
+  // 1. BOUNDARIES
+  let allTimeBoundaries = [];
+  const lStart = t2m(schedState.lunchStart), lEnd = t2m(schedState.lunchEnd);
 
-  // ── HEADER ROW 1: corner (colspan=2) + stage groups ──
-  let hr1 = `<th colspan="2" class="sched-corner" style="
-    background:#c81e33;
-    width:${HOUR_W + DAY_W}px; min-width:${HOUR_W + DAY_W}px;
-    height:${HR1_H}px;
-    top:0; z-index:16;
-    color:rgba(255,255,255,.7);
-    font:600 9px 'Outfit',sans-serif;
-    text-transform:uppercase; letter-spacing:.5px;
-    text-align:center; padding:0;
-  ">08:00–17:30</th>`;
-
-  STAGES.forEach(stage => {
-    const bg = '#c81e33';
-    hr1 += `<th colspan="${stage.machines.length}" class="sched-th-stage" style="
-      background:${bg};
-      top:0; height:${HR1_H}px;
-    ">${stage.label}</th>`;
-  });
-
-  // ── HEADER ROW 2: HORA first, then DÍA, then machine headers ──
-  let hr2 = '';
-
-  // Hour column header — leftmost sticky
-  hr2 += `<th class="sched-th-hour-corner" style="
-    background:#991b1b; color:#fff;
-    width:${HOUR_W}px; min-width:${HOUR_W}px; height:${HR2_H}px;
-    top:${HR1_H}px; left:0; z-index:13;
-    border-right:1px solid rgba(255,255,255,.2);
-    border-bottom:2px solid rgba(255,255,255,.15);
-    box-shadow:2px 2px 8px rgba(0,0,0,.12);
-  ">HORA</th>`;
-
-  // Day column header — second sticky
-  hr2 += `<th class="sched-th-day-corner" style="
-    background:#7f1d1d; color:#fff;
-    width:${DAY_W}px; min-width:${DAY_W}px; height:${HR2_H}px;
-    top:${HR1_H}px; left:${HOUR_W}px; z-index:12;
-    border-right:2px solid rgba(255,255,255,.2);
-    border-bottom:2px solid rgba(255,255,255,.15);
-    box-shadow:2px 2px 8px rgba(0,0,0,.15);
-  ">DÍA</th>`;
-
-  // Machine name headers — HORIZONTAL text, two-line wrapping allowed
-  STAGES.forEach(stage => {
-    stage.machines.forEach((machine, mi) => {
-      const isFirst = mi === 0;
-      hr2 += `<th class="sched-th-machine" data-machine-key="${machine}" style="
-        background:#7f1d1d;
-        top:${HR1_H}px;
-        width:${CELL_W}px; min-width:${CELL_W}px;
-        height:${HR2_H}px;
-        ${isFirst ? 'border-left:2px solid rgba(255,255,255,.3);' : 'border-left:1px solid rgba(255,255,255,.15);'}
-        padding:4px 3px;
-        text-align:center; vertical-align:middle;
-        font:600 9.5px \'Outfit\',sans-serif;
-        color:#fff;
-        white-space:normal; word-break:break-word; line-height:1.25;
-        letter-spacing:.2px; overflow:hidden;
-      ">${machine}<div class="resize-col-handle"></div></th>`;
-    });
-  });
-
-  // ── BODY: Days × Event Boundaries ──
-  let body = '';
-  DAYS.forEach((day, di) => {
-    const isLastDay = di === DAYS.length - 1;
-
-    // 1. Recolectar Hitos
-    let timeSet = new Set([480, 1050]); // 08:00 and 17:30
-    STAGES.forEach(stage => {
-      stage.machines.forEach(machine => {
-        const blks = scheduledBlocks[machine]?.[di] || [];
-        blks.forEach(blk => {
-          timeSet.add(Math.round(blk.startMin));
-          timeSet.add(Math.round(blk.startMin + blk.duration));
-        });
+  DAYS.forEach((_, di) => {
+    // Basic boundaries + ALWAYS include lunch if enabled
+    let timeSet = new Set([480, 1080]);
+    if (schedState.lunchEnabled && lStart && lEnd) {
+      if (lStart >= 480 && lStart <= 1080) timeSet.add(lStart);
+      if (lEnd >= 480 && lEnd <= 1080) timeSet.add(lEnd);
+    }
+    // Include all task starts/ends
+    ALL_MACHINES.forEach(m => {
+      (scheduledBlocks[m]?.[di] || []).forEach(b => {
+        timeSet.add(Math.round(b.startMin));
+        timeSet.add(Math.round(b.startMin + b.duration));
       });
     });
-    
-    let timeBoundaries = Array.from(timeSet).sort((a,b) => a - b);
-    let skipRows = {};
-    ALL_MACHINES.forEach(m => skipRows[m] = 0);
-    
-    const SLEN = timeBoundaries.length - 1;
-
-    for (let r = 0; r < SLEN; r++) {
-      const startMin = timeBoundaries[r];
-      const isFirstSlot = r === 0;
-      const isLastSlot = r === SLEN - 1;
-      const stStr = mkTimeFromMins(startMin);
-
-      const hourCell = `<td class="sched-td-hour" style="
-        background:#7f1d1d; color:#fff;
-        width:${HOUR_W}px; min-width:${HOUR_W}px; max-width:${HOUR_W}px;
-        position:sticky; left:0; z-index:4;
-        border-right:1px solid rgba(255,255,255,.15);
-        border-bottom:${isLastSlot && !isLastDay ? '3px solid rgba(255,255,255,.2)' : '1px solid rgba(255,255,255,.08)'};
-        font:600 11px 'Outfit',sans-serif; letter-spacing:.3px;
-        vertical-align: top; padding-top: 4px; text-align: center;
-      ">${stStr}</td>`;
-
-      const dayCell = isFirstSlot ? `<td rowspan="${SLEN}" class="sched-td-day" style="
-        background:#991b1b;
-        width:${DAY_W}px; min-width:${DAY_W}px; max-width:${DAY_W}px;
-        position:sticky; left:${HOUR_W}px; z-index:5;
-        border-bottom:${isLastDay ? 'none' : '3px solid rgba(255,255,255,.25)'};
-        border-right:2px solid rgba(255,255,255,.2);
-        box-shadow:2px 0 6px rgba(0,0,0,.08);
-      "><div class="sched-day-inner">${day}</div></td>` : '';
-
-      let machineCells = '';
-      STAGES.forEach(stage => {
-        const isImpresion = stage.id === 'impresion';
-        stage.machines.forEach((machine, mi) => {
-          const isFirstOfStage = mi === 0;
-          
-          if (skipRows[machine] > 0) {
-            skipRows[machine]--;
-            return;
-          }
-
-          if (isImpresion) {
-            const blks = scheduledBlocks[machine]?.[di] || [];
-            const activeBlk = blks.find(b => Math.round(b.startMin) === startMin);
-            
-            if (activeBlk) {
-              const endMin = Math.round(activeBlk.startMin + activeBlk.duration);
-              let span = 1;
-              for (let k = r + 1; k < timeBoundaries.length; k++) {
-                if (timeBoundaries[k] <= endMin) {
-                  span = k - r;
-                } else break;
-              }
-              skipRows[machine] = span - 1;
-              
-              const st = mkTimeFromMins(activeBlk.startMin);
-              const et = mkTimeFromMins(activeBlk.startMin + activeBlk.duration);
-              const durationStr = `(${Math.round(activeBlk.duration)} min)`;
-
-              let contentHtml = '';
-              let colorStyle = '';
-              
-              if (activeBlk.cssClass === 'block-c-prod') {
-                const titleArgs = `${escH(activeBlk.job.n)} - ${escH(activeBlk.job.producto || 'Producción')}`;
-                contentHtml = `
-                <div class="sched-task-card-row t-title">${titleArgs}</div>
-                <div class="sched-task-card-row t-sub">Línea: ${escH(activeBlk.job.linea || '-')} | Tirajes: ${escH(activeBlk.job.tirajes)} | Colores: ${escH(activeBlk.job.n_colores)}</div>
-                <div class="sched-task-card-row t-time">${st} - ${et} ${durationStr}</div>
-                `;
-                const bgCol = getColorByRMA(activeBlk.job.n);
-                colorStyle = `background: ${bgCol}; color: #fff; border: 1px solid rgba(0,0,0,0.1);`;
-              } else {
-                const titleText = activeBlk.cssClass === 'block-a-linea' ? 'CAMBIO DE LÍNEA + PREPARADO DE PINTURA' : 'CAMBIO DE PLACA + APROBACIÓN';
-                contentHtml = `
-                <div class="sched-task-card-row t-title">${titleText}</div>
-                <div class="sched-task-card-row t-time">${st} - ${et} ${durationStr}</div>
-                `;
-              }
-              
-              const cardClass = 'sched-task-card ' + activeBlk.cssClass;
-              
-              machineCells += `<td rowspan="${span}" class="sched-cell-impresion" style="
-                width:${CELL_W}px;min-width:${CELL_W}px; padding:4px; vertical-align:middle;
-                ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
-                border-bottom: 1px solid var(--border-color); background: #fdfdfd;
-              ">
-                <div class="${cardClass}" style="${colorStyle}">
-                  ${contentHtml}
-                </div>
-              </td>`;
-            } else {
-              machineCells += `<td class="sched-cell-impresion" style="
-                width:${CELL_W}px;min-width:${CELL_W}px; padding:0;
-                ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
-                border-bottom: 1px solid var(--border-color); background: #fdfdfd;
-              "></td>`;
-            }
-          } else {
-            machineCells += `<td class="sched-cell" style="
-                width:${CELL_W}px;min-width:${CELL_W}px;background:#fff;
-                border-bottom:${isLastSlot && !isLastDay ? '3px solid rgba(185,28,44,.2)' : '1px solid var(--border-color)'};
-                ${isFirstOfStage ? 'border-left:2px solid rgba(0,0,0,.1);' : 'border-left:1px solid rgba(0,0,0,.05);'}
-              "></td>`;
-          }
-        });
-      });
-
-      body += `<tr>${hourCell}${dayCell}${machineCells}</tr>`;
-    }
-
-    // Day separator row
-    if (!isLastDay) {
-      const totalCols = 2 + ALL_MACHINES.length;
-      body += `<tr class="sched-day-sep-row"><td colspan="${totalCols}"></td></tr>`;
-    }
+    allTimeBoundaries.push(Array.from(timeSet).sort((a,b) => a - b));
   });
 
-  // ── CONFIG PANEL ──
-  const machOpts = ALL_MACHINES.map(m => `<option value="${m}">${m}</option>`).join('');
-  const cenaVis = schedState.nightShifts.length > 0;
+  let dayHeights = allTimeBoundaries.map(bounds => (bounds.length - 1) * ROW_H);
+  let dayOffsets = [0];
+  for(let i=0; i<dayHeights.length; i++) dayOffsets.push(dayOffsets[i] + dayHeights[i] + 10);
+  const totalGanttHeight = dayOffsets[dayOffsets.length-1];
 
-  const cfgPanel = `
-    <div class="config-panel-toggle" id="config-panel-toggle" title="Panel de configuración">
-      <i class="uil ${schedState.configPanelOpen ? 'uil-angle-right' : 'uil-angle-left'}" id="cfg-toggle-icon"></i>
+  // 2. PANELS CONSTRUCTION
+  const cornerHTML = `<div class="gantt-corner">
+    <div style="height:${HR1_H}px; display:flex; align-items:center; justify-content:center; font:700 10px Outfit; color:#ffffff; background:#c81e33; border-bottom:1px solid rgba(255,255,255,.2);">08:00–17:30</div>
+    <div style="height:${HR2_H}px; display:flex; background:#7f1d1d;">
+      <div style="width:${HOUR_W}px; border-right:1px solid rgba(255,255,255,.2); display:flex; align-items:center; justify-content:center; font:600 11px Outfit; color:#ffffff;">HORA</div>
+      <div style="width:${DAY_W}px; display:flex; align-items:center; justify-content:center; font:600 11px Outfit; color:#ffffff;">DÍA</div>
     </div>
-    <div class="config-panel ${schedState.configPanelOpen ? 'open' : ''}" id="config-panel">
-      <div class="config-panel-inner">
-        <div class="config-panel-title"><i class="uil uil-setting"></i> Configuración</div>
-        <div class="cfg-section">
-          <div class="cfg-section-header"><i class="uil uil-utensils-alt"></i> Almuerzo</div>
-          <div class="cfg-section-body">
-            <div class="cfg-row">
-              <div class="cfg-field"><label>Hora inicio</label><input type="time" class="cfg-input" id="cfg-lunch-start" value="${schedState.lunchStart}"></div>
-              <div class="cfg-field"><label>Hora fin</label><input type="time" class="cfg-input" id="cfg-lunch-end" value="${schedState.lunchEnd}"></div>
-            </div>
-            <button class="cfg-apply-btn" id="cfg-btn-lunch"><i class="uil uil-check"></i> Aplicar almuerzo</button>
-            ${schedState.lunchEnabled ? `<button class="cfg-apply-btn" id="cfg-btn-lunch-clear" style="background:var(--bg-main);color:var(--text-secondary);border:1px solid var(--border-color);box-shadow:none;margin-top:4px;"><i class="uil uil-times"></i> Quitar almuerzo</button>` : ''}
-          </div>
-        </div>
-        <div class="cfg-section">
-          <div class="cfg-section-header"><i class="uil uil-moon"></i> Horario Nocturno</div>
-          <div class="cfg-section-body">
-            <div class="cfg-row">
-              <div class="cfg-field"><label>Fecha inicio</label><input type="date" class="cfg-input" id="cfg-night-date-start"></div>
-              <div class="cfg-field"><label>Fecha fin</label><input type="date" class="cfg-input" id="cfg-night-date-end"></div>
-            </div>
-            <div class="cfg-row">
-              <div class="cfg-field"><label>Hora inicio</label><input type="time" class="cfg-input" id="cfg-night-ts" value="18:00"></div>
-              <div class="cfg-field"><label>Hora fin</label><input type="time" class="cfg-input" id="cfg-night-te" value="23:00"></div>
-            </div>
-            <div class="cfg-field"><label>Máquina</label><select class="cfg-input" id="cfg-night-machine">${machOpts}</select></div>
-            <button class="cfg-apply-btn" id="cfg-btn-night"><i class="uil uil-plus-circle"></i> Registrar turno</button>
-            <div id="cfg-night-list" class="cfg-night-list">${buildNightHTML()}</div>
-            <div id="cfg-cena-section" style="display:${cenaVis ? 'block' : 'none'};">
-              <div style="margin:8px -12px 10px;padding:8px 12px;border-top:1px solid var(--border-color);background:#fffbf0;display:flex;align-items:center;gap:8px;font:600 10px 'Outfit',sans-serif;text-transform:uppercase;letter-spacing:.7px;color:#92400e;"><i class="uil uil-coffee"></i> Cena</div>
-              <div class="cfg-row">
-                <div class="cfg-field"><label>Hora inicio</label><input type="time" class="cfg-input" id="cfg-cena-start" value="20:00"></div>
-                <div class="cfg-field"><label>Hora fin</label><input type="time" class="cfg-input" id="cfg-cena-end" value="20:30"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>`;
+  </div>`;
 
-  contentBody.innerHTML = `
-    ${buildDateBarHTML('eta')}
-    <div class="schedule-outer" style="flex:1;overflow:hidden;position:relative;">
-      <div class="schedule-wrap">
-        <div class="schedule-scroll">
-          <div class="schedule-table-container" id="schedule-table-container"
-            style="transform:scale(1);transform-origin:top left;display:inline-block;min-width:100%;">
-            <table class="sched-table" style="border-collapse:collapse;table-layout:fixed;">
-              <colgroup>
-                <col data-ci="0" style="width:${HOUR_W}px;">
-                <col data-ci="1" style="width:${DAY_W}px;">
-                ${ALL_MACHINES.map((_, i) => `<col data-ci="${i + 2}" style="width:${CELL_W}px;">`).join('')}
-              </colgroup>
-              <thead>
-                <tr>${hr1}</tr>
-                <tr>${hr2}</tr>
-              </thead>
-              <tbody>${body}</tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-      ${cfgPanel}
+  let stageHeaders = '', machineHeaders = '';
+  STAGES.forEach(stg => {
+    stageHeaders += `<div class="gantt-header-stage-cell" style="width:${stg.machines.length * CELL_W}px;">${stg.label}</div>`;
+    stg.machines.forEach(m => {
+      machineHeaders += `<div class="gantt-header-mach-cell" data-machine="${m}" style="width:${CELL_W}px;">${m}</div>`;
+    });
+  });
+
+  let sidebarHTML = '';
+  DAYS.forEach((day, di) => {
+    let hours = '';
+    const bounds = allTimeBoundaries[di];
+    const sIdx = bounds.indexOf(lStart), eIdx = bounds.indexOf(lEnd);
+
+    for(let r=0; r<bounds.length-1; r++) {
+      const b1 = bounds[r], b2 = bounds[r+1];
+      const isLunchArea = (schedState.lunchEnabled && r >= sIdx && r < eIdx && sIdx !== -1 && lStart !== lEnd);
+      const isFirstLunchSlot = (r === sIdx);
+
+      hours += `<div class="gantt-sidebar-hour ${isLunchArea ? 'gantt-lunch-row' : ''}" style="height:${ROW_H}px; background:${isLunchArea ? '' : '#7f1d1d'}; color:#ffffff;">
+        ${(isLunchArea && isFirstLunchSlot) ? 'ALM' : (isLunchArea ? '' : mkTimeFromMins(b1))}
+      </div>`;
+    }
+    sidebarHTML += `<div style="display:flex; height:${dayHeights[di]}px;"><div style="flex-direction:column;">${hours}</div><div class="gantt-sidebar-day" style="width:${DAY_W}px;"><div class="gantt-day-text">${day}</div></div></div><div style="height:10px; background:#e5e7eb; width:100%;"></div>`;
+  });
+
+  let bodyColumnsHTML = '';
+  // Calculate grid overlay (lunch band) ONCE per day, consolidated
+  let gridOverlay = '';
+  DAYS.forEach((_, di) => {
+    const bounds = allTimeBoundaries[di], off = dayOffsets[di];
+    if (schedState.lunchEnabled && lStart && lEnd && lStart !== lEnd) {
+      const sIdx = bounds.indexOf(lStart), eIdx = bounds.indexOf(lEnd);
+      if (sIdx >= 0 && eIdx >= 0) {
+        const t = sIdx * ROW_H + off, h = (eIdx - sIdx) * ROW_H;
+        gridOverlay += `<div class="gantt-body-lunch-band" style="top:${t}px; height:${h}px;">ALMUERZO</div>`;
+      }
+    }
+  });
+
+  ALL_MACHINES.forEach(m => {
+    let tasks = '';
+    DAYS.forEach((_, di) => {
+      const bounds = allTimeBoundaries[di], off = dayOffsets[di], blks = scheduledBlocks[m]?.[di] || [];
+      blks.forEach(blk => {
+        const sIdx = bounds.indexOf(Math.round(blk.startMin)), eIdx = bounds.indexOf(Math.round(blk.startMin + blk.duration));
+        if (sIdx >= 0 && eIdx >= 0) {
+          const t = sIdx * ROW_H + off, h = (eIdx - sIdx) * ROW_H;
+          const isProd = blk.cssClass === 'block-c-prod';
+          const cInfo = isProd ? getColorInfoByRMA(blk.job.n) : { bg: '#f3f4f6', text: '#374151' };
+          const isImpression = ['MOZP', 'SPEEDMASTER', 'GTO-52'].includes(m);
+          const isBarnizado = ['KORD 2', 'KORD 3'].includes(m);
+          const isTroquelado = ['TROQUELADORA 57', 'TROQUELADORA 72', 'TROQUELADORA 77', 'TROQUELADORA MERCEDES'].includes(m);
+          let contentHTML = '';
+
+          // COMMON DATA (Global Rule)
+          const startM = blk.startMin;
+          const endM = blk.startMin + blk.duration;
+          const durationMin = Math.max(1, Math.round(blk.duration));
+          const timeStr = `${mkTimeFromMins(startM)} - ${mkTimeFromMins(endM)} (${durationMin} min)`;
+
+          if (isProd) {
+            const mat = String(blk.job?.material_requerido || '').toUpperCase();
+            const tj  = blk.job?.tirajes || '-';
+            const lines = [];
+
+            if (isImpression) {
+              const cur = blk.extraData?.currentCycle || 1;
+              const tot = blk.extraData?.totalCycles || 1;
+              const lin = blk.job?.linea || '';
+              const c2  = String(blk.job?.codigo_2 || '').trim();
+              
+              // L1: RMA - PRODUCTO | CICLO (Mixed Bold/Normal)
+              lines.push(`<div style="line-height:1.15; margin-bottom:0; text-align:left; font-size:11px;"><b style="text-transform:uppercase;">${escH(blk.job.n)} - ${escH(blk.job.producto)}</b> | ${cur}/${tot}</div>`);
+              
+              // L4: TIME RANGE (Priority)
+              if (h > 45) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.85; line-height:1.15; margin-bottom:0; text-align:left;">${escH(timeStr)}</div>`);
+
+              // L2: MATERIAL | LINEA | CODIGO_2 (Strict Construction)
+              if (h > 65) {
+                let l2 = escH(mat);
+                if (h > 80 && lin) l2 += ` | ${escH(lin)}`;
+                if (h > 95 && c2)  l2 += ` | ${escH(c2)}`;
+                lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.9; line-height:1.15; margin-bottom:0; text-align:left;">${l2}</div>`);
+              }
+
+              // L3: TIRAJES
+              if (h > 95) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.9; line-height:1.15; margin-bottom:0; text-align:left;">Tirajes: ${escH(tj)}</div>`);
+
+            } else if (isBarnizado) {
+              const tr = blk.job?.n_troquel || '-';
+              lines.push(`<div style="font-weight:bold; text-transform:uppercase; font-size:11px; line-height:1.2; margin-bottom:1px; text-align:left;">${escH(blk.job.n)} - ${escH(blk.job.producto)}</div>`);
+              if (h > 35) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.85; line-height:1.2; margin-bottom:1px; text-align:left;">${escH(timeStr)}</div>`);
+              if (h > 55) lines.push(`<div style="font-weight:normal; font-size:10px; line-height:1.2; text-align:left;">${escH(mat)} | N° TROQUEL: ${escH(tr)}</div>`);
+              if (h > 80) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.9; margin-top:1px; text-align:left;">Tirajes: ${escH(tj)}</div>`);
+
+            } else if (isTroquelado) {
+              const tr = blk.job?.n_troquel || '-';
+              const ut = blk.job?.un_tiraje;
+              const hasUT = !!ut && ut !== '-' && ut !== '0' && ut !== 0;
+
+              lines.push(`<div style="font-weight:bold; text-transform:uppercase; font-size:11px; line-height:1.2; margin-bottom:1px; text-align:left;">${escH(blk.job.n)} - ${escH(blk.job.producto)}</div>`);
+              if (h > 35) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.85; line-height:1.2; margin-bottom:1px; text-align:left;">${escH(timeStr)}</div>`);
+              if (h > 55) lines.push(`<div style="font-weight:normal; font-size:10px; line-height:1.2; text-align:left;">${escH(mat)} | N° TROQUEL: ${escH(tr)}</div>`);
+              if (h > 75) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.9; margin-top:1px; text-align:left;">Tirajes: ${escH(tj)}</div>`);
+              if (h > 95 && hasUT) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.9; margin-top:1px; text-align:left;">UN/TIRAJE: ${escH(ut)}</div>`);
+
+            } else {
+              lines.push(`<div style="font-weight:bold; text-transform:uppercase; font-size:11px; line-height:1.2; text-align:left;">${escH(blk.job.n)} - ${escH(blk.job.producto)}</div>`);
+              if (h > 35) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.85; text-align:left;">${escH(timeStr)}</div>`);
+            }
+            contentHTML = lines.join('');
+
+          } else {
+            const lines = [];
+            lines.push(`<div style="font-weight:700; font-size:11px; text-transform:uppercase; line-height:1.2; text-align:left;">${escH(blk.type)}</div>`);
+            if (h > 30) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.8; text-align:left;">${escH(timeStr)}</div>`);
+            contentHTML = lines.join('');
+          }
+
+          // VERTICAL ALIGNMENT RULE (Global)
+          const jc = (h >= 40) ? 'center' : 'flex-start';
+
+          tasks += `<div class="gantt-task-card ${blk.cssClass}" style="top:${t}px; height:${h}px; background:${cInfo.bg}; color:${cInfo.text}; border:1px solid rgba(0,0,0,0.12); width:100%; display:flex; flex-direction:column; padding:4px 6px; overflow:hidden; justify-content:${jc}; align-items:flex-start; text-align:left;">
+            ${contentHTML}
+          </div>`;
+        }
+      });
+    });
+
+    bodyColumnsHTML += `<div class="gantt-body-column" data-machine="${m}" style="width:${CELL_W}px; position:relative; flex-shrink:0; border-right:1px solid rgba(0,0,0,0.05);">
+      ${gridOverlay}
+      ${tasks}
+    </div>`;
+  });
+
+  contentBody.innerHTML = `${buildDateBarHTML('eta')}
+    <div class="gantt-root" id="gantt-root">
+      <div class="gantt-top-row">${cornerHTML}<div class="gantt-header-outer" id="gantt-header-outer"><div class="gantt-header-content" style="display:flex; flex-direction:column; width:max-content;"><div class="gantt-header-stage-row" style="display:flex;">${stageHeaders}</div><div class="gantt-header-mach-row" style="display:flex;">${machineHeaders}</div></div></div></div>
+      <div class="gantt-bottom-row"><div class="gantt-sidebar-outer" id="gantt-sidebar-outer"><div class="gantt-sidebar-content" style="height:${totalGanttHeight}px;">${sidebarHTML}</div></div>
+      <div class="gantt-body-outer" id="gantt-body-outer"><div class="gantt-body-content" style="display:flex; height:${totalGanttHeight}px; width:max-content;">${bodyColumnsHTML}</div></div></div>
       ${zoomBadgeHTML()}
     </div>`;
 
-  wireDateBar('eta', exportCronogramaPorEtapa);
-  wireFullscreenBtn();
-  document.getElementById('config-panel-toggle').addEventListener('click', toggleConfigPanel);
-  document.getElementById('cfg-btn-lunch').addEventListener('click', applyLunch);
-  document.getElementById('cfg-btn-lunch-clear')?.addEventListener('click', clearLunch);
-  document.getElementById('cfg-btn-night').addEventListener('click', addNightShift);
-  contentBody.querySelectorAll('.sched-cell').forEach(c => c.addEventListener('click', onCellClick));
-
-  // Make machine columns and hour rows resizable
+  const b = document.getElementById('gantt-body-outer'), h = document.getElementById('gantt-header-outer'), s = document.getElementById('gantt-sidebar-outer');
+  if(b&&h&&s) b.onscroll = () => { h.scrollLeft = b.scrollLeft; s.scrollTop = b.scrollTop; };
+  
+  wireDateBar('eta', exportCronogramaPorEtapa); wireFullscreenBtn();
+  setupGanttConfigEvents();
   setTimeout(() => initResizable('etapa'), 60);
+}
+
+function setupGanttConfigEvents() {
+  const btnClose = document.getElementById('gantt-modal-close');
+  if (btnClose) btnClose.onclick = closeGanttModal;
+  
+  const overlay = document.getElementById('gantt-modal-overlay');
+  if (overlay) overlay.onclick = (e) => { if (e.target.id === 'gantt-modal-overlay') closeGanttModal(); };
+}
+
+function showGanttModal(type) {
+  const overlay = document.getElementById('gantt-modal-overlay');
+  const body = document.getElementById('gantt-modal-body');
+  if (!overlay || !body) return;
+
+  if (type === 'lunch') {
+    body.innerHTML = `
+      <div class="modal-title">Configurar Almuerzo</div>
+      <p style="font-size:13px; color:#6b7280; margin-bottom:15px;">El tiempo de almuerzo está fijado en 30 minutos obligatorios.</p>
+      <div class="modal-section">
+        <label class="modal-label">Hora de Inicio</label>
+        <input type="time" class="modal-input" id="cfg-lunch-start" value="${schedState.lunchStart}">
+      </div>
+      <div class="modal-section">
+        <label class="modal-label">Hora de Fin (Calculada)</label>
+        <input type="time" class="modal-input" id="cfg-lunch-end" value="${schedState.lunchEnd}" readonly style="background:#f9fafb; cursor:not-allowed;">
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal btn-modal-secondary" id="btn-modal-clear-lunch">Eliminar Almuerzo</button>
+        <button class="btn-modal btn-modal-primary" id="btn-modal-ok-lunch">OK</button>
+      </div>`;
+
+    const sIn = document.getElementById('cfg-lunch-start');
+    const eIn = document.getElementById('cfg-lunch-end');
+    if(sIn && eIn) {
+      sIn.onchange = () => {
+        if(!sIn.value) return;
+        const m = t2m(sIn.value);
+        eIn.value = mkTimeFromMins(m + 30);
+      };
+    }
+    document.getElementById('btn-modal-ok-lunch').onclick = () => { applyLunch(); closeGanttModal(); };
+    document.getElementById('btn-modal-clear-lunch').onclick = () => { clearLunch(); closeGanttModal(); };
+  } else if (type === 'night') {
+    body.innerHTML = `
+      <div class="modal-title">Horario Nocturno</div>
+      <div class="modal-section">
+        <label class="modal-label">Máquina</label>
+        <select class="modal-input" id="cfg-night-machine">
+          ${ALL_MACHINES.map(m => `<option value="${m}">${m}</option>`).join('')}
+        </select>
+      </div>
+      <div class="modal-section" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div>
+          <label class="modal-label">Fecha Inicio</label>
+          <input type="date" class="modal-input" id="cfg-night-date-start">
+        </div>
+        <div>
+          <label class="modal-label">Fecha Fin</label>
+          <input type="date" class="modal-input" id="cfg-night-date-end">
+        </div>
+      </div>
+      <div class="modal-section" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div>
+          <label class="modal-label">Hora Trabajo Inicio</label>
+          <input type="time" class="modal-input" id="cfg-night-work-start" value="18:30">
+        </div>
+        <div>
+          <label class="modal-label">Hora Trabajo Fin</label>
+          <input type="time" class="modal-input" id="cfg-night-work-end" value="06:30">
+        </div>
+      </div>
+      <div class="modal-section" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div>
+          <label class="modal-label">Hora Cena Inicio</label>
+          <input type="time" class="modal-input" id="cfg-night-dinner-start" value="00:00">
+        </div>
+        <div>
+          <label class="modal-label">Hora Cena Fin</label>
+          <input type="time" class="modal-input" id="cfg-night-dinner-end" value="00:30">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal btn-modal-secondary" onclick="closeGanttModal()">Cerrar</button>
+        <button class="btn-modal btn-modal-primary" id="btn-modal-ok-night">OK</button>
+      </div>
+      <div class="night-list-modal" id="modal-night-list">${buildNightHTMLModal()}</div>`;
+
+    document.getElementById('btn-modal-ok-night').onclick = () => { addNightShift(); };
+  }
+
+  overlay.classList.add('active');
+  exportDropdown.classList.remove('open');
+}
+
+
+function closeGanttModal() {
+  document.getElementById('gantt-modal-overlay')?.classList.remove('active');
+}
+
+function buildNightHTMLModal() {
+  return schedState.nightShifts.map((s, i) => `
+    <div class="night-item-modal">
+      <strong>${s.machine}</strong>
+      <span>${s.dateStart || '—'} → ${s.dateEnd || '—'}</span>
+      <span>${s.timeStart} – ${s.timeEnd}</span>
+      <button class="btn-remove-night" onclick="removeNightShift(${i}); document.getElementById('modal-night-list').innerHTML = buildNightHTMLModal();">
+        <i class="uil uil-trash-alt"></i>
+      </button>
+    </div>`).join('');
 }
 
 function exportCronogramaPorEtapa() {
@@ -1304,50 +1916,68 @@ function exportCronogramaPorEtapa() {
 //  CONFIG PANEL
 // ─────────────────────────────────────────────────────────────
 function toggleConfigPanel() {
-  schedState.configPanelOpen = !schedState.configPanelOpen;
-  document.getElementById('config-panel')?.classList.toggle('open', schedState.configPanelOpen);
-  const ico = document.getElementById('cfg-toggle-icon');
-  if (ico) ico.className = `uil ${schedState.configPanelOpen ? 'uil-angle-right' : 'uil-angle-left'}`;
+  // Obsolete but kept minimal to avoid errors if called
 }
-function reRenderEtapa() { schedState.configPanelOpen = true; renderCronogramaPorEtapa(); }
+function reRenderEtapa() { renderCronogramaPorEtapa(); }
 
-// LUNCH
+// LUNCH CONFIG
 function applyLunch() {
-  schedState.lunchStart = document.getElementById('cfg-lunch-start')?.value || '13:00';
-  schedState.lunchEnd = document.getElementById('cfg-lunch-end')?.value || '14:00';
-  schedState.lunchEnabled = true;
-  const sM = t2m(schedState.lunchStart), eM = t2m(schedState.lunchEnd);
-  ALL_MACHINES.forEach(m => DAYS.forEach((_, di) => HOUR_SLOTS.forEach((slot, si) => {
-    if (slot.start >= sM && slot.start < eM && schedState.cells[m]?.[di]?.[si] !== undefined)
-      schedState.cells[m][di][si] = 'lunch';
-  })));
-  reRenderEtapa();
+  const s = document.getElementById('cfg-lunch-start')?.value;
+  const e = document.getElementById('cfg-lunch-end')?.value;
+  if (s && e) {
+    schedState.lunchStart = s;
+    schedState.lunchEnd = e;
+    schedState.lunchEnabled = true;
+    reRenderEtapa();
+  }
 }
 function clearLunch() {
   schedState.lunchEnabled = false;
-  ALL_MACHINES.forEach(m => DAYS.forEach((_, di) => HOUR_SLOTS.forEach((_, si) => {
-    if (schedState.cells[m]?.[di]?.[si] === 'lunch') schedState.cells[m][di][si] = '';
-  })));
   reRenderEtapa();
 }
 
-// NIGHT SHIFT
-function addNightShift() {
-  const machine = document.getElementById('cfg-night-machine')?.value;
-  const dateStart = document.getElementById('cfg-night-date-start')?.value || '';
-  const dateEnd = document.getElementById('cfg-night-date-end')?.value || '';
-  const timeStart = document.getElementById('cfg-night-ts')?.value || '';
-  const timeEnd = document.getElementById('cfg-night-te')?.value || '';
-  const cenaStart = document.getElementById('cfg-cena-start')?.value || '';
-  const cenaEnd = document.getElementById('cfg-cena-end')?.value || '';
-  if (!machine || !timeStart || !timeEnd) return;
-  schedState.nightShifts.push({ machine, dateStart, dateEnd, timeStart, timeEnd, cenaStart, cenaEnd });
-  const sM = t2m(timeStart), eM = t2m(timeEnd);
-  DAYS.forEach((_, di) => HOUR_SLOTS.forEach((slot, si) => {
-    if (slot.start >= sM && slot.start < eM && schedState.cells[machine]?.[di]?.[si] !== undefined)
-      schedState.cells[machine][di][si] = 'night';
-  }));
-  reRenderEtapa();
+/**
+ * BREAK-AWARE ARCHITECTURE FOUNDATION (Phase 3 Prep)
+ * Rule: Operation completely stops during breaks.
+ * This helper calculates visual segments for a task crossing one or more breaks.
+ */
+function getWorkSegments(startMins, durationMins, dayBreaks = []) {
+  let segments = [];
+  let remaining = durationMins;
+  let current = startMins;
+  let iter = 0;
+
+  while (remaining > 0 && iter < 20) {
+    iter++;
+    // 1. If currently inside any break, jump to the end of it
+    let activeBreak = dayBreaks.find(b => current >= b.start && current < b.end);
+    if (activeBreak) {
+      current = activeBreak.end;
+      continue;
+    }
+
+    // 2. Find the next upcoming break
+    let nextBreak = dayBreaks
+      .filter(b => b.start > current)
+      .sort((a,b) => a.start - b.start)[0];
+
+    // 3. Calculate distance to next break or end of work (1080)
+    let limit = nextBreak ? nextBreak.start : 1080;
+    let available = limit - current;
+
+    if (available <= 0) {
+       // Should not happen if boundaries are correct, but for safety:
+       current = limit; if (current >= 1080) break;
+       continue;
+    }
+
+    let chunk = Math.min(remaining, available);
+    segments.push({ start: current, duration: chunk });
+    
+    current += chunk;
+    remaining -= chunk;
+  }
+  return segments;
 }
 function removeNightShift(idx) {
   const s = schedState.nightShifts[idx];
@@ -1361,21 +1991,17 @@ function removeNightShift(idx) {
   schedState.nightShifts.splice(idx, 1);
   reRenderEtapa();
 }
-function buildNightHTML() {
-  return schedState.nightShifts.map((s, i) => `
-    <div class="cfg-night-item">
-      <strong>${s.machine}</strong>
-      <span>${s.dateStart || '—'} → ${s.dateEnd || '—'}</span>
-      <span>${s.timeStart} – ${s.timeEnd}</span>
-      ${s.cenaStart ? `<span style="color:#92400e;">Cena: ${s.cenaStart}–${s.cenaEnd}</span>` : ''}
-      <button class="cfg-night-remove" onclick="removeNightShift(${i})">✕</button>
-    </div>`).join('');
-}
 
 // CELL CLICK
 function onCellClick(e) {
   const cell = e.currentTarget;
   const machine = cell.dataset.machine, di = +cell.dataset.day, si = +cell.dataset.slot;
+  
+  if (!schedState.cells[machine]) {
+    console.warn(`[onCellClick] Máquina ${machine} no inicializada en el estado.`);
+    return;
+  }
+
   const cur = schedState.cells[machine]?.[di]?.[si];
   if (cur === 'lunch' || cur === 'night') return;
   const next = cur === 'work' ? '' : 'work';
@@ -1807,6 +2433,10 @@ function escH(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '
 //  Drag bottom edge = resize row.
 // ─────────────────────────────────────────────────────────────
 function initResizable(viewType) {
+  if (document.getElementById('gantt-root')) {
+    wireResizableGantt();
+    return;
+  }
   const table = document.querySelector('.sched-table');
   if (!table) return;
 
@@ -1837,6 +2467,21 @@ function initResizable(viewType) {
   table.querySelectorAll('.sched-gen-day').forEach(td => { addRowResizeHandle(td); });
 }
 
+function wireResizableGantt() {
+  const headers = document.querySelectorAll('.gantt-header-mach-cell');
+  headers.forEach((th) => {
+    addColResizeHandle(th, newW => {
+      const machine = th.dataset.machine;
+      // Update the machine column in the body
+      const bodyCol = document.querySelector(`.gantt-body-column[data-machine="${machine}"]`);
+      if (bodyCol) bodyCol.style.width = newW + 'px';
+      
+      // Update the stage header width (this might be complex if it spans multiple)
+      // For now, the machine headers are updated by addColResizeHandle automatically.
+    });
+  });
+}
+
 function addColResizeHandle(th, getBodyCells) {
   // Check if handle already exists (embedded in HTML)
   if (th.querySelector('.resize-col-handle')) {
@@ -1863,7 +2508,7 @@ function wireColHandle(handle, th, updateFn) {
     document.body.style.userSelect = 'none';
 
     const onMove = ev => {
-      const newW = Math.max(50, startW + (ev.clientX - startX));
+      const newW = Math.max(30, startW + (ev.clientX - startX));
       th.style.width = newW + 'px';
       th.style.minWidth = newW + 'px';
       if (typeof updateFn === 'function') updateFn(newW);
