@@ -1,24 +1,24 @@
 // ================================
+// VERIFICACIONES DE FASE 2
+// ================================
+if (typeof window.escH !== "function") console.error("Falta normalizers.js");
+if (typeof window.getColorByRMA !== "function") console.error("Falta colorUtils.js");
+if (typeof window.t2m !== "function") console.error("Falta timeUtils.js");
+if (typeof window.buscarRMA !== "function") console.error("Falta planificacion.js");
+if (typeof window.calcCiclos !== "function") console.error("Falta planificacionCalculations.js");
+console.log("Fase 2 Utils cargados:", { escH: typeof window.escH, getColorByRMA: typeof window.getColorByRMA, t2m: typeof window.t2m, buscarRMA: typeof window.buscarRMA, calcCiclos: typeof window.calcCiclos });
+
+// ================================
 // CONEXIÓN A SUPABASE
 // ================================
-const SUPABASE_URL = "https://xtyichijbrutbdgfcalz.supabase.co";
-const SUPABASE_KEY = "sb_publishable_kEmKQ-plQH4fVtTULYF-cg_ZDe-1rVM";
-
-let supabaseClient = null;
-if (window.supabase) {
-  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-} else {
-  console.warn("La librería de Supabase no se cargó correctamente.");
-}
+// Se ha movido la inicialización a frontend/src/services/api.js
+// La variable supabaseClient ya está declarada globalmente en api.js
 
 // ================================
 // PRUEBA DE CONEXIÓN
 // ================================
 async function probarConexionBT() {
-  const { data, error } = await supabaseClient
-    .from("bt_imprenta")
-    .select("*")
-    .limit(10);
+  const { data, error } = await window.apiGetAllBtImprenta();
 
   if (error) {
     console.error("ERROR AL LEER bt_imprenta:", error);
@@ -120,37 +120,7 @@ const autocompleteEl = document.getElementById('autocomplete-dropdown');
 // ─────────────────────────────────────────────────────────────
 //  HELPERS
 // ─────────────────────────────────────────────────────────────
-function escH(str) {
-  if (str === null || str === undefined) return '';
-  return String(str).replace(/[&<>'"]/g, tag => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      "'": '&#39;',
-      '"': '&quot;'
-  }[tag]));
-}
-
-function getColorByRMA(rma) {
-  if (!rma) return '#1e3a8a';
-  const palette = [
-    '#1e3a8a', '#1d4ed8', '#2563eb', // Azules
-    '#0e7490', '#0891b2', '#0284c7', // Celestes / Blue-greens
-    '#166534', '#15803d', '#16a34a', '#0f766e', // Verdes
-    '#78350f', '#92400e', '#854d0e'  // Cafés (Sin Rojos)
-  ];
-  let hash = 0;
-  for (let i = 0; i < rma.length; i++) {
-    hash = rma.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return palette[Math.abs(hash) % palette.length];
-}
-
-function getCleanTroquelKey(val) {
-  const s = String(val || '').trim();
-  if (s === '' || s === '-' || s.toLowerCase() === 'null') return null;
-  return s;
-}
+// Funciones escH, getColorByRMA y getCleanTroquelKey movidas a utils/
 
 // ─────────────────────────────────────────────────────────────
 //  CSV HELPERS
@@ -188,12 +158,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // FASE 1: Carga de BT Imprenta desde Supabase
   try {
     if (supabaseClient) {
-      const { data, error } = await supabaseClient
-        .from('bt_imprenta')
-        .select('*');
-      
+      const { data, error } = await window.apiGetAllBtImprenta();
+
       if (error) throw error;
-      
+
       if (data && data.length > 0) {
         // Obtenemos los encabezados de las llaves del primer objeto
         const headers = Object.keys(data[0]);
@@ -242,11 +210,11 @@ function setupKeyboard() {
 function changeZoom(delta, reset = false) {
   if (!['general', 'etapa'].includes(activeMenu)) return;
   scheduleZoom = reset ? 1 : Math.min(2.5, Math.max(0.3, scheduleZoom + delta));
-  
+
   // Support both old and new architecture containers
   const c = document.getElementById('gantt-root') || document.getElementById('schedule-table-container');
   if (c) c.style.zoom = scheduleZoom;
-  
+
   const b = document.getElementById('zoom-badge-pct');
   if (b) b.textContent = Math.round(scheduleZoom * 100) + '%';
 }
@@ -306,7 +274,7 @@ function renderContent() {
     contentBody.innerHTML = `<div class="empty-state"><i class="uil uil-apps"></i><h2>Panel Principal</h2><p>Selecciona una opción del menú lateral para continuar.</p></div>`;
     return;
   }
-  if (activeMenu === 'planificacion') { pageTitle.textContent = ''; return renderPlanificacion(); }
+  if (activeMenu === 'planificacion') { pageTitle.textContent = ''; return window.renderPlanificacion(); }
 
   if (activeMenu === 'general') { pageTitle.textContent = 'Cronograma General'; return renderCronogramaGeneral(); }
   if (activeMenu === 'etapa') { pageTitle.textContent = 'Cronograma por Etapa'; return renderCronogramaPorEtapa(); }
@@ -321,204 +289,24 @@ function renderContent() {
 // ─────────────────────────────────────────────────────────────
 //  PLANIFICACIÓN (RMA SEARCH)
 // ─────────────────────────────────────────────────────────────
-function renderPlanificacion() {
-  contentBody.innerHTML = `
-    <div class="plan-container">
-      <div class="plan-main-title">
-        <h1>Planificación</h1>
-      </div>
-      <div class="plan-header">
-        <i class="uil uil-plus-circle"></i>
-        <h2>Añadir RMA</h2>
-      </div>
-
-      <div class="plan-search-box">
-        <div class="search-box">
-          <i class="uil uil-search"></i>
-          <input type="text" id="rma-input" placeholder="Ingrese número de RMA (Enter para buscar)..." maxlength="4" autocomplete="off">
-        </div>
-      </div>
-      
-      <div class="table-wrap" id="rma-list-container" style="background:#fff; border-radius:12px; border:1px solid var(--border-color); overflow:hidden;">
-        ${renderRMATable()}
-      </div>
-    </div>
-  `;
-
-  const input = document.getElementById('rma-input');
-  if (input) {
-    input.focus();
-    input.addEventListener('keydown', async (e) => {
-      if (e.key === 'Enter') {
-        const val = input.value.trim();
-        if (!val) return;
-        await buscarRMA(val);
-        input.value = '';
-      }
-    });
-  }
-
-  // Listener para navegación por teclado en la tabla
-  const tableContainer = document.getElementById('rma-list-container');
-  if (tableContainer) {
-    tableContainer.addEventListener('keydown', (e) => {
-      if (e.target.classList.contains('plan-maquina-input')) {
-        const idx = parseInt(e.target.getAttribute('data-idx'));
-        const total = rmaSessionList.length;
-
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          // Calcular el siguiente índice (si es el último, se queda en el mismo)
-          const nextIdx = (idx < total - 1) ? idx + 1 : idx;
-          cargarDatosTecnicos(nextIdx);
-        } else if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          if (idx < total - 1) {
-            const nextInput = tableContainer.querySelector(`.plan-maquina-input[data-idx="${idx + 1}"]`);
-            if (nextInput) nextInput.focus();
-          }
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          if (idx > 0) {
-            const prevInput = tableContainer.querySelector(`.plan-maquina-input[data-idx="${idx - 1}"]`);
-            if (prevInput) prevInput.focus();
-          }
-        }
-      }
-    });
-  }
-}
+// renderPlanificacion se movió a frontend/src/modules/planificacion.js
 
 const SPECIAL_COD_IFAS = [
   'IFA-01508', 'IFA-01468', 'IFA-01504', 'IFA-01527', 'IFA-01372',
   'IFA-01493', 'IFA-03842', 'IFA-01531', 'IFA-01543', 'IFA-01546'
 ];
 
-function renderRMATable() {
-
-  if (rmaSessionList.length === 0) {
-    return `<div class="empty-state" style="padding: 60px 40px;">
-              <i class="uil uil-search"></i>
-              <p>No hay RMAs añadidos aún.</p>
-            </div>`;
-  }
-
-  const rowsHtml = rmaSessionList.map((item, index) => {
-    const isLoaded = item.ciclos !== undefined;
-    return `
-      <tr data-rma="${item.n}">
-        <td class="col-rma">${item.n}</td>
-        <td title="${escH(item.producto)}">${escH(item.producto)}</td>
-        <td title="${escH(item.presentacion_comercial)}">${escH(item.presentacion_comercial)}</td>
-        <td title="${escH(item.material_requerido)}">${escH(item.material_requerido)}</td>
-        <td>${escH(item.codigo_material)}</td>
-        <td class="col-cantidad">${escH(item.cantidad_requerida_para_cubrir)}</td>
-        <td>${item.linea || '-'}</td>
-        <td>${item.n_colores || '-'}</td>
-        <td>
-          <input type="text" class="plan-maquina-input" 
-                 data-idx="${index}"
-                 value="${item.maquina || ''}" 
-                 oninput="updateRmaMaquina('${item.n}', this.value, this)"
-                 placeholder="M, S, G..."
-                 onclick="event.stopPropagation()">
-        </td>
-
-        ${isLoaded ? `
-          <td>${item.n_troquel || '-'}</td>
-          <td>${item.un_tiraje || '-'}</td>
-          <td>${item.ciclos}</td>
-          <td class="col-tirajes">${item.tirajes}</td>
-        ` : ''}
-      </tr>
-    `;
-  }).join('');
-
-  // Calcular Totales
-  const totalCantidad = rmaSessionList.reduce((acc, i) => acc + (parseFloat(i.cantidad_requerida_para_cubrir) || 0), 0);
-  const totalTirajes = rmaSessionList.reduce((acc, i) => acc + (parseFloat(i.tirajes) || 0), 0);
-
-  return `
-    <div class="table-scroll">
-
-      <table class="data-table plan-table-mini">
-        <thead>
-          <tr>
-            <th>RMA</th>
-            <th>PRODUCTO</th>
-            <th>PRESENTACIÓN</th>
-            <th>MATERIAL</th>
-            <th>COD-IFA</th>
-            <th>CANTIDAD</th>
-            <th>LINEA</th>
-            <th>N° COLORES</th>
-            <th>MAQUINA</th>
-            ${rmaSessionList.some(i => i.ciclos !== undefined) ? `
-              <th>N° TROQUEL</th>
-              <th>UN/TIRAJE</th>
-              <th>CICLOS</th>
-              <th>TIRAJES</th>
-            ` : ''}
-          </tr>
-        </thead>
-
-
-        <tbody id="plan-table-body">
-          ${rowsHtml}
-        </tbody>
-      </table>
-    </div>
-    <div class="table-footer plan-footer-combined">
-      <div class="footer-left">
-        <span>${rmaSessionList.length} registro(s) en planificación</span>
-      </div>
-      <div class="plan-summary-bar-inline">
-        <div class="summary-item">
-          <span class="summary-label">Total Cantidad:</span>
-          <span class="summary-value">${totalCantidad.toLocaleString()}</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-label">Total Tirajes:</span>
-          <span class="summary-value">${totalTirajes.toLocaleString()}</span>
-        </div>
-      </div>
-      <div class="footer-right">
-        <button class="btn-generar-crono" onclick="generarCronogramaEtapa()" style="background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:7px;">
-          <i class="uil uil-calendar-alt"></i> GENERAR CRONOGRAMA
-        </button>
-      </div>
-    </div>
-  `;
-
-}
+// renderRMATable se movió a frontend/src/modules/planificacion.js
 
 // Helper para normalizar comparaciones entre tablas (RMA vs BT Imprenta)
-const normCol = (val) => String(val || "").trim().toUpperCase();
-// Helper específico para máquinas (ignora guiones y espacios)
-const normMaq = (val) => normCol(val).replace(/-/g, "").replace(/\s+/g, "");
+// normCol y normMaq movidas a frontend/src/utils/normalizers.js
 
-function updateRmaMaquina(rmaN, val, inputEl) {
-
-  const item = rmaSessionList.find(i => normCol(i.n) === normCol(rmaN));
-  if (item) {
-    const v = val.trim().toLowerCase();
-    let finalVal = val;
-
-    if (v === 'm') finalVal = 'MOZP';
-    else if (v === 's') finalVal = 'SPEEDMASTER';
-    else if (v === 'g') finalVal = 'GTO-52';
-
-    item.maquina = finalVal;
-    if (inputEl && inputEl.value !== finalVal) {
-      inputEl.value = finalVal;
-    }
-  }
-}
+// updateRmaMaquina se movió a frontend/src/modules/planificacion.js
 
 
 async function cargarDatosTecnicos(refocusIdx = null) {
   if (rmaSessionList.length === 0) return;
-  
+
   if (!supabaseClient) {
     showSaveToast("Error: Sin conexión a Supabase");
     return;
@@ -530,11 +318,7 @@ async function cargarDatosTecnicos(refocusIdx = null) {
   showSaveToast("Calculando datos técnicos...");
 
   try {
-    const { data, error } = await supabaseClient
-
-      .from('bt_imprenta')
-      .select('codigo, n_troquel, cajas_por_tiraje, tirajes_por_pliego, maquina_preferencial, codigo_2')
-      .in('codigo', codigos);
+    const { data, error } = await window.apiGetBtImprentaByCodigos(codigos);
 
     if (error) throw error;
 
@@ -543,22 +327,22 @@ async function cargarDatosTecnicos(refocusIdx = null) {
     rmaSessionList.forEach(item => {
       const searchKey = normCol(item.codigo_material);
       const isSpecial = SPECIAL_COD_IFAS.map(c => normCol(c)).includes(searchKey);
-      
+
       let btData = null;
 
       if (isSpecial) {
         const userMaq = normMaq(item.maquina);
         // console.log(`[DEBUG-PLANIFICACION] Caso Especial Detectado: ${searchKey}`);
-        
+
         if (!userMaq) {
           // console.log(`[DEBUG-PLANIFICACION] Omitiendo match especial para ${searchKey} porque MAQUINA está vacía.`);
         } else {
           // Double match: Codigo + Maquina Preferencial (Normalización robusta de máquina)
-          btData = data ? data.find(row => 
-            normCol(row.codigo) === searchKey && 
+          btData = data ? data.find(row =>
+            normCol(row.codigo) === searchKey &&
             normMaq(row.maquina_preferencial) === userMaq
           ) : null;
-          
+
           // console.log(`[DEBUG-PLANIFICACION] Buscando Match Especial (UserMaq: ${userMaq}):`, btData ? "SÍ" : "NO");
         }
       } else {
@@ -566,55 +350,28 @@ async function cargarDatosTecnicos(refocusIdx = null) {
         // Lógica Normal: Primer match por código
         btData = data ? data.find(row => normCol(row.codigo) === searchKey) : null;
       }
-      
+
       // Datos Base de BT
       item.n_troquel = btData?.n_troquel || '-';
       item.un_tiraje = btData?.cajas_por_tiraje || '-';
       item.codigo_2 = btData?.codigo_2 || '';
-      
+
       const tirajesPliego = parseFloat(btData?.tirajes_por_pliego);
 
 
       // 1. CÁLCULO DE CICLOS
-      const nColoresRaw = item.n_colores;
-      const nColores = parseFloat(nColoresRaw);
-      
-      if (!isNaN(nColores) && item.maquina) {
-        const maq = (item.maquina || '').toUpperCase();
-        let divisor = 2; // Default for SPEEDMASTER/MOZP
-        if (maq === 'GTO-52') divisor = 4;
-
-        let ciclos = Math.ceil(nColores / divisor);
-        
-        // Validación robusta de SOBRES
-        const mat = (item.material_requerido || '').toUpperCase();
-        if (mat.includes('SOBRE')) {
-          ciclos += 1;
-        }
-        item.ciclos = ciclos;
-
-        // console.log(`[DEBUG-PLANIFICACION] Calculando Ciclos para RMA ${item.n}: C:${nColores} / D:${divisor} + S:${mat.includes('SOBRE')} = ${ciclos}`);
-      } else {
-        item.ciclos = '-';
-      }
+      const ciclosCalc = window.calcCiclos(item.n_colores, item.maquina, item.material_requerido);
+      item.ciclos = ciclosCalc !== null ? ciclosCalc : '-';
 
       // 2. CÁLCULO DE TIRAJES (+10% margen de seguridad)
-      const cantidad = parseFloat(item.cantidad_requerida_para_cubrir);
-      if (!isNaN(cantidad) && !isNaN(tirajesPliego) && tirajesPliego > 0) {
-        const tirajeBase = cantidad / tirajesPliego;
-        const tirajeFinal = Math.ceil(tirajeBase * 1.10);
-        item.tirajes = tirajeFinal;
-
-        // console.log(`[DEBUG-PLANIFICACION] Tirajes para ${item.n}: Base=${tirajeBase.toFixed(2)}, Final(+10%)=${tirajeFinal}`);
-      } else {
-        item.tirajes = '-';
-      }
+      const tirajesCalc = window.calcTirajes(item.cantidad_requerida_para_cubrir, tirajesPliego);
+      item.tirajes = tirajesCalc !== null ? tirajesCalc : '-';
     });
 
     const container = document.getElementById('rma-list-container');
     if (container) {
-      container.innerHTML = renderRMATable();
-      
+      container.innerHTML = window.renderRMATable();
+
       if (refocusIdx !== null) {
         setTimeout(() => {
           const nextInput = container.querySelector(`.plan-maquina-input[data-idx="${refocusIdx}"]`);
@@ -636,76 +393,7 @@ async function cargarDatosTecnicos(refocusIdx = null) {
 }
 
 
-async function buscarRMA(n) {
-  // Validar duplicados
-  if (rmaSessionList.some(item => String(item.n) === String(n))) {
-    showSaveToast("El RMA #" + n + " ya está en la lista");
-    return;
-  }
-
-  if (!supabaseClient) {
-    console.error("Supabase client no inicializado");
-    showSaveToast("Error: Sin conexión");
-    return;
-  }
-
-  try {
-    const { data, error } = await supabaseClient
-      .from('rma')
-      .select('n, producto, presentacion_comercial, material_requerido, codigo_material, cantidad_requerida_para_cubrir')
-      .eq('n', n)
-      .limit(1);
-
-    if (error) throw error;
-
-    if (!data || data.length === 0) {
-      showSaveToast("RMA #" + n + " no encontrado");
-      return;
-    }
-
-    if (data && data.length > 0) {
-      const rmaItem = data[0];
-      const searchKey = normCol(rmaItem.codigo_material);
-
-      // [DEBUG-PLANIFICACION] Buscando match inicial para: [${searchKey}]
-      // console.log(`[DEBUG-PLANIFICACION] Buscando match en memoria para: ${searchKey}`);
-
-      // 2. Buscar datos técnicos iniciales en BT Imprenta
-      // Usamos una consulta robusta y filtramos en JS para coincidir con la lógica del Batch
-      const { data: btRows, error: btError } = await supabaseClient
-        .from('bt_imprenta')
-        .select('codigo, linea, cantidad_de_colores')
-        .eq('codigo', rmaItem.codigo_material.trim());
-      
-      const btMatch = btRows ? btRows.find(r => normCol(r.codigo) === searchKey) : null;
-      
-      if (!btError && btMatch) {
-        // console.log("[DEBUG-PLANIFICACION] Match inicial encontrado: SÍ", btMatch);
-        rmaItem.linea = btMatch.linea || '-';
-        rmaItem.n_colores = btMatch.cantidad_de_colores || '-';
-      } else {
-        // console.log("[DEBUG-PLANIFICACION] Match inicial encontrado: NO");
-        // if (btError) console.error("[DEBUG-PLANIFICACION] Error query:", btError);
-        rmaItem.linea = '-';
-        rmaItem.n_colores = '-';
-      }
-
-
-
-      // 3. Inicializar campos de carga posterior (vacíos)
-      rmaItem.maquina = '';
-      // ciclos, tirajes, etc. se mantienen undefined hasta presionar CARGAR
-
-      rmaSessionList.unshift(rmaItem);
-      const container = document.getElementById('rma-list-container');
-      if (container) container.innerHTML = renderRMATable();
-    }
-
-  } catch (err) {
-    console.error("Error al buscar RMA:", err);
-    showSaveToast("Error al consultar Supabase");
-  }
-}
+// buscarRMA se movió a frontend/src/modules/planificacion.js
 
 
 // ─────────────────────────────────────────────────────────────
@@ -918,178 +606,20 @@ const TURNO_INICIO = 480;
 const TURNO_FIN = 1050;
 const MINUTOS_TOTALES_DIA = 570;
 
-function mkTimeFromMins(min) {
-  const total = min; // Ya viene en minutos absolutos desde las 00:00, siendo 480 las 08:00
-  const h = Math.floor(total / 60);
-  const m = Math.floor(total % 60);
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-}
+// mkTimeFromMins movido a timeUtils.js
 
 // ─────────────────────────────────────────────────────────────
 //  LOGICA FASE 1: AGRUPAMIENTO Y CICLOS
 // ─────────────────────────────────────────────────────────────
-function normalizeColors(s) {
-  if (!s || typeof s !== 'string') return '';
-  return Array.from(s.replace(/\s+/g, '').toUpperCase()).sort().join('');
-}
+// normalizeColors, isValidColorCode, getColorsPerCycle movidas a colorUtils.js
 
-function isValidColorCode(s) {
-  if (!s || typeof s !== 'string') return false;
-  const clean = s.trim();
-  return clean !== '' && clean !== '-';
-}
-
-function getColorsPerCycle(colors, bodies) {
-  if (!colors) return [];
-  const chars = Array.from(colors.replace(/\s+/g, '').toUpperCase());
-  const cycles = [];
-  for (let i = 0; i < chars.length; i += bodies) {
-    cycles.push(chars.slice(i, i + bodies).join(''));
-  }
-  return cycles;
-}
-
-function buildScheduleLogicStructure(queues) {
-  const structure = {
-    'SPEEDMASTER': {},
-    'MOZP': {},
-    'GTO-52': {}
-  };
-
-  const machines = ['SPEEDMASTER', 'MOZP', 'GTO-52'];
-  
-  machines.forEach(machine => {
-    const bodies = (machine === 'GTO-52') ? 4 : 2;
-    const queue = queues[machine] || [];
-    const groupsByLinea = {};
-
-    queue.forEach(job => {
-      const linea = job.linea || 'SIN LINEA';
-      if (!groupsByLinea[linea]) groupsByLinea[linea] = {};
-
-      // Match con bt_imprenta (Match: COD-IFA -> código)
-      // Normalización robusta para nombres de columna y valores
-      const btRows = DATA.btImprenta.rows || [];
-      let excludeReason = '';
-      const match = btRows.find(r => {
-        const btCode = String(r['codigo'] || r['código'] || r['CÓDIGO'] || '').trim().toUpperCase();
-        const planCode = String(job.codigo_material || '').trim().toUpperCase();
-        return btCode === planCode && btCode !== '';
-      });
-
-      if (!match) excludeReason = 'IFA no encontrado en bt_imprenta';
-      
-      const originalColors = match ? (match['codigo_2'] || match['código_2'] || match['CÓDIGO_2'] || '') : '';
-      const valid = isValidColorCode(originalColors);
-      
-      if (match && !valid) excludeReason = 'código_2 vacío o inválido (-)';
-      
-      const normalized = valid ? normalizeColors(originalColors) : 'INVALIDO';
-      const cycles = valid ? getColorsPerCycle(originalColors, bodies) : [];
-
-      if (!groupsByLinea[linea][normalized]) {
-        groupsByLinea[linea][normalized] = {
-          normalizedColors: normalized,
-          items: []
-        };
-      }
-
-      groupsByLinea[linea][normalized].items.push({
-        // Identificadores base
-        rma: job.n,
-        product: job.producto,
-        ifa: job.codigo_material,
-
-        // Campos originales restaurados (Nombres íntegros de Planificación)
-        presentacion_comercial: job.presentacion_comercial,
-        material_requerido: job.material_requerido,
-        cantidad_requerida_para_cubrir: job.cantidad_requerida_para_cubrir,
-        linea: job.linea,
-        n_colores: job.n_colores,
-        maquina: job.maquina,
-        n_troquel: job.n_troquel,
-        un_tiraje: job.un_tiraje,
-        ciclos: job.ciclos,
-        tirajes: job.tirajes,
-
-        // Datos técnicos calculados
-        originalColors: originalColors,
-        normalizedColors: normalized,
-        cycles: cycles,
-        numCycles: cycles.length,
-        bodies: bodies,
-        isValid: valid,
-        excludeReason: excludeReason,
-
-        // Referencia completa
-        jobRef: job
-      });
-    });
-
-    structure[machine] = groupsByLinea;
-  });
-
-  return structure;
-}
+// buildScheduleLogicStructure se movió a frontend/src/modules/impresionLogic.js
 
 // ─────────────────────────────────────────────────────────────
 //  COLOR IDENTITY SYSTEM (Hybrid: Palette + Deterministic Variants)
 // ─────────────────────────────────────────────────────────────
 
-const EXEC_PALETTE_HSL = [
-  [210, 55, 52], [120, 45, 50], [15, 60, 55],  [215, 30, 50], [281, 45, 52],
-  [180, 50, 48], [38, 65, 58],  [243, 50, 54], [200, 60, 56], [342, 60, 58],
-  [84, 45, 48],  [210, 25, 55], [263, 40, 56], [10, 65, 60],  [160, 50, 52],
-  [50, 40, 55],  [250, 45, 60], [20, 70, 62],  [190, 65, 50], [30, 30, 50]
-];
-
-/**
- * Deterministic hash for any string (DJB2)
- */
-function getHash(str) {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) + str.charCodeAt(i);
-  }
-  return Math.abs(hash);
-}
-
-/**
- * Returns a consistent, professional color for an RMA with adaptive contrast.
- * Threshold: 56% L for switching to black text.
- */
-function getColorInfoByRMA(rma) {
-  const s = String(rma || '').trim();
-  if (!s) return { bg: '#f3f4f6', text: '#374151' };
-
-  const hash = getHash(s);
-  const baseIdx = hash % EXEC_PALETTE_HSL.length;
-  const base = EXEC_PALETTE_HSL[baseIdx];
-
-  // Variation: 0: normal, 1: -6% Lightness, 2: +6% Lightness
-  const variant = Math.floor(hash / EXEC_PALETTE_HSL.length) % 3;
-  
-  let [h, sat, lum] = base;
-
-  if (variant === 1) { // Lighter
-    lum = Math.min(65, lum + 6);
-  } else if (variant === 2) { // Darker
-    lum = Math.max(35, lum - 6);
-  }
-
-  // PROTECTION: Avoid being exactly on the 55-57% threshold
-  if (lum >= 55 && lum <= 57) {
-    lum = (variant === 1) ? 58 : 54;
-  }
-
-  const bg = `hsl(${h}, ${sat}%, ${lum}%)`;
-  const text = (lum >= 56) ? '#111827' : '#ffffff'; // Contrast validation
-
-  return { bg, text };
-}
-
-// Deprecated wrapper for backward compatibility if needed elsewhere
-function getColorByRMA(rma) { return getColorInfoByRMA(rma).bg; }
+// EXEC_PALETTE_HSL, getHash, getColorInfoByRMA, getColorByRMA movidas a colorUtils.js
 
 async function generarCronogramaEtapa() {
   if (rmaSessionList.length === 0) {
@@ -1105,12 +635,12 @@ async function generarCronogramaEtapa() {
   showSaveToast("Calculando Cronograma...");
 
   try {
-    const { data: tiemposData, error } = await supabaseClient.from('tiempos').select('*');
+    const { data: tiemposData, error } = await window.apiGetAllTiempos();
     if (error) throw error;
-    
+
     ALL_MACHINES.forEach(m => scheduledBlocks[m] = {});
     const rmaFinishTracker = {}; // Para controlar la dependencia de Barnizado: { [rma]: absMins }
-    
+
     const queues = {};
     ALL_MACHINES.forEach(m => queues[m] = []);
     rmaSessionList.forEach(item => {
@@ -1122,10 +652,10 @@ async function generarCronogramaEtapa() {
     });
 
     // FASE 1: Construir estructura lógica intermedia
-    const logicBase = buildScheduleLogicStructure(queues);
+    const logicBase = window.buildScheduleLogicStructure(queues, DATA.btImprenta.rows || []);
     window.cronogramaLogicBase = logicBase;
     console.log("FASE 1: Estructura lógica construida:", logicBase);
-    
+
     // Resumen simplificado para validación en consola
     const summary = [];
     ['SPEEDMASTER', 'MOZP', 'GTO-52'].forEach(m => {
@@ -1145,443 +675,49 @@ async function generarCronogramaEtapa() {
     });
     if (summary.length > 0) console.table(summary);
 
-    ['SPEEDMASTER', 'MOZP', 'GTO-52'].forEach(machine => {
-      const groupsByLinea = logicBase[machine] || {};
-      if (Object.keys(groupsByLinea).length === 0) return;
-      
-      let cursorDay = 0;
-      let cursorMin = TURNO_INICIO;
-      
-      const mqTiempos = tiemposData.find(t => {
-        const maqt = (t.maquina || '').toUpperCase().replace(/\s|-/g, '');
-        const mac  = machine.toUpperCase().replace(/\s|-/g, '');
-        return maqt === mac;
-      }) || {};
+    window.scheduleImpresionStage(
+      logicBase,
+      tiemposData,
+      scheduledBlocks,
+      rmaFinishTracker,
+      TURNO_INICIO,
+      TURNO_FIN
+    );
 
-      function addBlock(duration, type, job, details, customClass, extraData = null) {
-        if (duration <= 0) return;
-        let remaining = duration;
-        let iter = 0;
-        while (remaining > 0 && iter < 100) {
-          iter++;
-          const availableInDay = TURNO_FIN - cursorMin;
-          const chunk = Math.min(remaining, availableInDay);
-          
-          if (!scheduledBlocks[machine][cursorDay]) {
-            scheduledBlocks[machine][cursorDay] = [];
-          }
-          
-          scheduledBlocks[machine][cursorDay].push({
-            startMin: cursorMin,
-            duration: chunk,
-            type: type,
-            job: job,
-            details: details,
-            cssClass: customClass || '',
-            extraData: extraData
-          });
-          
-          cursorMin += chunk;
-          remaining -= chunk;
-          
-          if (cursorMin >= TURNO_FIN && remaining > 0) {
-            cursorDay++;
-            cursorMin = TURNO_INICIO;
-          }
-        }
-      }
+    console.log("FASE 2: Empezando etapa de Barnizado. RMAs con fin de impresión:", Object.keys(rmaFinishTracker));
 
-        // 1. Iterar por Línea
-        const sortedLineas = Object.keys(groupsByLinea).sort();
-        sortedLineas.forEach(lineaName => {
-          const colorGroups = groupsByLinea[lineaName];
-          
-          // 2. Ordenar Grupos de Colores por complejidad (cantidad de colores únicos)
-          const sortedColorSets = Object.keys(colorGroups).sort((a, b) => {
-            if (a === 'INVALIDO') return 1;
-            if (b === 'INVALIDO') return -1;
-            return b.length - a.length;
-          });
+    // --- ETAPA 2: BARNIZADO (Motor de Optimización por Troquel) ---
+    const barnizadoJobFinishTracker = window.scheduleBarnizadoStage(
+      rmaSessionList,
+      rmaFinishTracker,
+      tiemposData,
+      scheduledBlocks,
+      TURNO_INICIO,
+      TURNO_FIN
+    );
 
-          sortedColorSets.forEach(colorSet => {
-            if (colorSet === 'INVALIDO') return; // Excluir productos inválidos del cronograma
+    // --- ETAPA 3: TROQUELADO (Motor de Optimización por Troquel y Recursos Globales) ---
+    window.scheduleTroqueladoStage(
+      rmaSessionList,
+      barnizadoJobFinishTracker,
+      tiemposData,
+      scheduledBlocks,
+      TURNO_INICIO,
+      TURNO_FIN
+    );
 
-            const group = colorGroups[colorSet];
-            const validItems = group.items.filter(i => i.isValid);
-            if (validItems.length === 0) return;
-
-            // 3. Validar consistencia de ciclos en el grupo
-            const cycleCounts = validItems.map(i => i.numCycles);
-            const maxCycles = Math.max(...cycleCounts);
-            const allSame = cycleCounts.every(c => c === maxCycles);
-            
-            if (!allSame) {
-              console.warn(`Advertencia: Ciclos inconsistentes en el grupo ${colorSet} de la línea ${lineaName}. Se usará maxCycles=${maxCycles}.`);
-            }
-
-            // 4. Renderizado por Ciclos
-            for (let c = 0; c < maxCycles; c++) {
-              validItems.forEach((item, itemIdx) => {
-                // Protección: Si el producto no tiene este ciclo (grupos heterogéneos), omitir
-                if (!item.cycles[c]) return;
-
-                const job = item.jobRef;
-                const nColoresCiclo = item.cycles[c].length; // Cuerpos activos en este ciclo
-                const tirajes = parseFloat(job.tirajes) || 0;
-
-                // Tiempos Técnicos
-                const washBase = parseFloat(mqTiempos.cambio_color_lavado_rod_tin_x_cuerpo) || 0;
-                const prepBase = parseFloat(mqTiempos.preparado_de_tinta_x_cuerpo) || 0;
-                const plateBase = parseFloat(mqTiempos.cambio_placa_por_cuerpo) || 0;
-                const aprobacion = parseFloat(mqTiempos.aprobacion) || 0;
-                const valorProm = parseFloat(mqTiempos.valor_prom) || 1;
-
-                const timeWash = washBase * nColoresCiclo;
-                const timePrep = prepBase * nColoresCiclo;
-                const timePlate = (plateBase * nColoresCiclo) + aprobacion;
-                const timeProd = (tirajes / valorProm) * 60;
-
-                // Texto del ciclo para el bloque de producción
-                const cycleLabel = `Ciclo ${c + 1}/${item.numCycles}`;
-                const colorsLabel = `Colores actual: ${item.cycles[c]}`;
-
-                // Bloques de Preparación (Solo para el primer producto de CADA ciclo)
-                if (itemIdx === 0) {
-                  addBlock(timeWash, 'LAVADO DE RODILLOS Y TINTEROS', job, `${timeWash.toFixed(0)} min | ${colorsLabel}`, 'block-a-wash');
-                  addBlock(timePrep, 'PREPARADO DE PINTURA', job, `${timePrep.toFixed(0)} min | ${colorsLabel}`, 'block-a-prep');
-                }
-
-                // Bloque de Placa + Aprobación (Para todos los productos en cada ciclo)
-                addBlock(timePlate, 'CAMBIO DE PLACA + APROBACIÓN', job, `${timePlate.toFixed(0)} min | ${nColoresCiclo} cuerpos`, 'block-b-placa');
-
-                // Bloque de Producción (Se repite íntegro por ciclo)
-                const detailsProd = `${cycleLabel} | Línea: ${job.linea || '-'} | Tirajes: ${tirajes}`;
-                addBlock(timeProd, job.producto || 'Producción', job, detailsProd, 'block-c-prod', {
-                  cycleLabel: cycleLabel,
-                  currentCycle: c + 1,
-                  totalCycles: maxCycles,
-                  codigo_2: item.originalColors
-                });
-
-                // Registrar Fin de Impresión para este RMA
-                const absFinish = (cursorDay * 1440) + cursorMin;
-                const rKey = String(job.n).trim();
-                if (!rmaFinishTracker[rKey] || absFinish > rmaFinishTracker[rKey]) {
-                  rmaFinishTracker[rKey] = absFinish;
-                }
-              });
-            }
-          });
-        });
-      });
-
-      console.log("FASE 2: Empezando etapa de Barnizado. RMAs con fin de impresión:", Object.keys(rmaFinishTracker));
-
-      // --- ETAPA 2: BARNIZADO (Motor de Optimización por Troquel) ---
-      const machinesBarnizado = ['KORD 2', 'KORD 3'];
-      const barnizadoTrackers = {}; 
-      const barnizadoJobFinishTracker = {}; // { [rma]: absMin }
-      machinesBarnizado.forEach(m => {
-        barnizadoTrackers[m] = { day: 0, min: TURNO_INICIO, lastTroquel: null };
-      });
-
-      console.log('[DEBUG-BALANCER] DISPONIBILIDAD INICIAL:', JSON.stringify(barnizadoTrackers));
-
-      // Cola de trabajo (referencia a objetos originales con metadatos de liberación)
-      let pendingBarnizado = rmaSessionList
-        .map((job, idx) => ({ 
-          job: job, 
-          originalIndex: idx, 
-          liberationTime: rmaFinishTracker[String(job.n)] 
-        }))
-        .filter(item => item.liberationTime !== undefined);
-
-      let barnizadoIteration = 0;
-      while (pendingBarnizado.length > 0 && barnizadoIteration < 500) {
-        barnizadoIteration++;
-
-        // 1. Encontrar la máquina que se libera antes
-        let targetMachine = 'KORD 2';
-        let minAvailAbs = Infinity;
-        machinesBarnizado.forEach(m => {
-          const t = barnizadoTrackers[m];
-          const abs = (t.day * 1440) + t.min;
-          if (abs < minAvailAbs) {
-            minAvailAbs = abs;
-            targetMachine = m;
-          }
-        });
-
-        const tracker = barnizadoTrackers[targetMachine];
-        const machineAvail = (tracker.day * 1440) + tracker.min;
-
-        // 2. Buscar en tiemposData los parámetros de esta máquina
-        const mqTiempos = tiemposData.find(t => {
-          const maqt = (t.maquina || '').toUpperCase().replace(/\s|-/g, '');
-          const mac  = targetMachine.toUpperCase().replace(/\s|-/g, '');
-          return maqt === mac;
-        });
-
-        if (!mqTiempos) break; 
-
-        const baseCambio = parseFloat(mqTiempos.cambio_formato) || 0;
-        const valorProm = Number(mqTiempos.valor_prom) || 1;
-
-        // 3. Evaluar cada RMA pendiente para esta máquina específica
-        let bestScore = Infinity;
-        let winnerIdx = -1;
-        let bestWait = 0;
-        let bestSetup = 0;
-
-        pendingBarnizado.forEach((cand, idx) => {
-          const wait = Math.max(0, cand.liberationTime - machineAvail);
-          
-          // Optimización por Troquel: si coincide el troquel, el cambio es 0
-          const setup = (String(cand.job.n_troquel).trim() === String(tracker.lastTroquel).trim() && tracker.lastTroquel !== null) ? 0 : baseCambio;
-          
-          const score = wait + setup;
-
-          if (score < bestScore) {
-            bestScore = score;
-            winnerIdx = idx;
-            bestWait = wait;
-            bestSetup = setup;
-          }
-        });
-
-        if (winnerIdx === -1) break;
-
-        const item = pendingBarnizado.splice(winnerIdx, 1)[0];
-        const job = item.job;
-        const liberationTime = item.liberationTime;
-
-        console.log(`[DEBUG-TROQUEL] Máquina: ${targetMachine} | lastTroquel: ${tracker.lastTroquel} | Ganador: RMA ${job.n} (Troquel: ${job.n_troquel}) | Espera: ${bestWait}m | Cambio: ${bestSetup}m | Score: ${bestScore}`);
-
-        // 4. Asignar Bloques (Cambio y Producción)
-        let cursorDay = Math.floor(Math.max(liberationTime, machineAvail) / 1440);
-        let cursorMin = Math.max(liberationTime, machineAvail) % 1440;
-        const machine = targetMachine;
-
-        function addBlockBarnizado(duration, type, job, details, customClass, extraData = null) {
-          if (duration <= 0) return;
-          let remaining = duration;
-          let iter = 0;
-          const startDayLog = cursorDay;
-          const startMinLog = cursorMin;
-          while (remaining > 0 && iter < 100) {
-            iter++;
-            const availableInDay = TURNO_FIN - cursorMin;
-            const chunk = Math.min(remaining, availableInDay);
-            if (!scheduledBlocks[machine][cursorDay]) scheduledBlocks[machine][cursorDay] = [];
-            scheduledBlocks[machine][cursorDay].push({
-              startMin: cursorMin, duration: chunk, type: type, job: job, details: details,
-              cssClass: customClass || '', extraData: extraData
-            });
-            cursorMin += chunk; remaining -= chunk;
-            if (cursorMin >= TURNO_FIN && remaining > 0) { cursorDay++; cursorMin = TURNO_INICIO; }
-          }
-          console.log(`[DEBUG-BARNIZADO] INSERCIÓN: ${machine} | Tipo: ${type} | RMA: ${job.n} | Inicio: D${startDayLog} ${mkTimeFromMins(startMinLog)} | Fin: D${cursorDay} ${mkTimeFromMins(cursorMin)} | Dur: ${Math.round(duration)} min`);
-        }
-
-        if (bestSetup > 0) {
-          addBlockBarnizado(bestSetup, 'CAMBIO DE FORMATO', job, 'Cambio de Formato Barnizado', 'block-c-formato');
-        }
-
-        const tj = Number(job.tirajes) || 0;
-        const durProd = Math.ceil((tj / valorProm) * 60);
-        
-        if (durProd > 0) {
-          addBlockBarnizado(durProd, job.producto || 'Barnizado', job, `Barnizado - ${job.producto}`, 'block-c-prod', { isBarnizado: true });
-          console.log('[OK BARNIZADO]', { rma: job.n, valor_prom: valorProm, tirajes: tj, duracion: durProd });
-        }
-
-        tracker.day = cursorDay;
-        tracker.min = cursorMin;
-        tracker.lastTroquel = job.n_troquel;
-        
-        // Registrar Fin de Barnizado para este RMA
-        barnizadoJobFinishTracker[String(job.n).trim()] = (cursorDay * 1440) + cursorMin;
-      }
-
-      // --- ETAPA 3: TROQUELADO (Motor de Optimización por Troquel y Recursos Globales) ---
-      const machinesTroquelado = ['TROQUELADORA 57', 'TROQUELADORA 72', 'TROQUELADORA 77', 'TROQUELADORA MERCEDES'];
-      const troqueladoTrackers = {}; 
-      const troquelGlobalTracker = {}; // { [n_troquel]: absMinFree }
-      
-      machinesTroquelado.forEach(m => {
-        troqueladoTrackers[m] = { day: 0, min: TURNO_INICIO, lastTroquel: null };
-      });
-
-      console.log('FASE 3: Empezando etapa de Troquelado. RMAs con fin de barnizado:', Object.keys(barnizadoJobFinishTracker));
-
-      let pendingTroquelado = rmaSessionList
-        .filter(rma => {
-          const ut = parseFloat(rma.un_tiraje);
-          const isValid = !isNaN(ut) && ut > 0;
-          if (!isValid) console.warn("[TROQUELADO] RMA omitido por UN/TIRAJE inválido", { rma: rma.n, UN_TIRAJE: rma.un_tiraje });
-          return isValid;
-        })
-        .map((job, idx) => ({ 
-          job: job, 
-          originalIndex: idx, 
-          barnizadoFinish: barnizadoJobFinishTracker[String(job.n).trim()] || 0
-        }));
-
-      let troqueladoIteration = 0;
-      while (pendingTroquelado.length > 0 && troqueladoIteration < 500) {
-        troqueladoIteration++;
-
-        // 1. Encontrar la máquina que se libera antes
-        let targetMachine = null;
-        let minAvailAbs = Infinity;
-        machinesTroquelado.forEach(m => {
-          const t = troqueladoTrackers[m];
-          const abs = (t.day * 1440) + t.min;
-          if (abs < minAvailAbs) {
-            minAvailAbs = abs;
-            targetMachine = m;
-          }
-        });
-
-        if (!targetMachine) break;
-        const tracker = troqueladoTrackers[targetMachine];
-        const machineAvail = (tracker.day * 1440) + tracker.min;
-
-        // 2. Buscar en tiemposData los parámetros de esta máquina (Match Exacto)
-        const mqTiempos = tiemposData.find(t => {
-          return (t.maquina || '').toUpperCase().trim() === targetMachine.toUpperCase().trim();
-        });
-
-        if (!mqTiempos) {
-          console.error(`[TROQUELADO] No se encontraron tiempos para la máquina: ${targetMachine}`);
-          troqueladoTrackers[targetMachine].min = TURNO_FIN; 
-          continue;
-        }
-
-        // 3. Evaluar cada RMA pendiente para esta máquina con jerarquía de desempate
-        let bestScore = Infinity;
-        let winnerIdx = -1;
-
-        pendingTroquelado.forEach((cand, idx) => {
-          const tKey = getCleanTroquelKey(cand.job.n_troquel);
-          const troquelAvail = tKey ? (troquelGlobalTracker[tKey] || 0) : 0;
-          const wait = Math.max(0, cand.barnizadoFinish - machineAvail, troquelAvail - machineAvail);
-          
-          const isSameTroquel = String(cand.job.n_troquel).trim() === String(tracker.lastTroquel).trim() && tracker.lastTroquel !== null;
-          const setup = isSameTroquel ? 0 : (parseFloat(mqTiempos.cambio_troquel) || 0);
-          
-          const score = wait + setup;
-
-          if (score < bestScore) {
-            bestScore = score;
-            winnerIdx = idx;
-          } else if (score === bestScore && winnerIdx !== -1) {
-            // Desempate 1: Priorizar mismo troquel
-            const winnerCand = pendingTroquelado[winnerIdx];
-            const winnerIsSame = String(winnerCand.job.n_troquel).trim() === String(tracker.lastTroquel).trim();
-            const candIsSame = isSameTroquel;
-
-            if (candIsSame && !winnerIsSame) {
-              winnerIdx = idx;
-            } else if (candIsSame === winnerIsSame) {
-              // Desempate 2: FIFO (Orden original)
-              if (cand.originalIndex < winnerCand.originalIndex) {
-                winnerIdx = idx;
-              }
-            }
-          }
-        });
-
-        if (winnerIdx === -1) break;
-
-        const item = pendingTroquelado.splice(winnerIdx, 1)[0];
-        const job = item.job;
-        const tKey = getCleanTroquelKey(job.n_troquel);
-        const troquelAvail = tKey ? (troquelGlobalTracker[tKey] || 0) : 0;
-
-        // 4. Asignar Bloques - FÓRMULA EXACTA: Math.max(machineAvail, barnizadoFinish, troquelAvail)
-        const startTimeAbs = Math.max(machineAvail, item.barnizadoFinish, troquelAvail);
-        let cursorDay = Math.floor(startTimeAbs / 1440);
-        let cursorMin = startTimeAbs % 1440;
-        const machine = targetMachine;
-
-        function addBlockTroquel(duration, type, job, details, customClass, extraData = null) {
-          if (duration <= 0) return;
-          let remaining = duration;
-          let iter = 0;
-          while (remaining > 0 && iter < 100) {
-            iter++;
-            const availableInDay = TURNO_FIN - cursorMin;
-            const chunk = Math.min(remaining, availableInDay);
-            if (!scheduledBlocks[machine][cursorDay]) scheduledBlocks[machine][cursorDay] = [];
-            scheduledBlocks[machine][cursorDay].push({
-              startMin: cursorMin, duration: chunk, type: type, job: job, details: details,
-              cssClass: customClass || '', extraData: extraData
-            });
-            cursorMin += chunk; remaining -= chunk;
-            if (cursorMin >= TURNO_FIN && remaining > 0) { cursorDay++; cursorMin = TURNO_INICIO; }
-          }
-        }
-
-        // Tiempos Técnicos
-        const isSameTroquel = String(job.n_troquel).trim() === String(tracker.lastTroquel).trim() && tracker.lastTroquel !== null;
-        const tCambio = isSameTroquel ? 0 : (parseFloat(mqTiempos.cambio_troquel) || 0);
-        const tRegulado = parseFloat(mqTiempos.regulado_troquel) || 0;
-        const tAprob = parseFloat(mqTiempos.aprobacion) || 0;
-        const ut = parseFloat(job.un_tiraje) || 0;
-        
-        let tRegEsp = 0;
-        let isMissingRegEsp = false;
-        if (ut >= 6) {
-          tRegEsp = parseFloat(mqTiempos.regulado_especial) || 0;
-          if (tRegEsp === 0) isMissingRegEsp = true;
-        }
-
-        const vProm = parseFloat(mqTiempos.valor_prom) || 1;
-        const tj = parseFloat(job.tirajes) || 0;
-        const tProd = Math.ceil((tj / vProm) * 60);
-
-        // Ejecutar Secuencia Técnica (Troquel bloqueado desde el inicio de la secuencia)
-        if (tCambio > 0) addBlockTroquel(tCambio, 'CAMBIO DE TROQUEL', job, 'Preparación', 'block-troq-setup');
-        addBlockTroquel(tRegulado, 'REGULADO TROQUEL', job, 'Regulado', 'block-troq-setup');
-        addBlockTroquel(tAprob, 'APROBACIÓN', job, 'Aprobación', 'block-troq-setup');
-
-        if (ut >= 6) {
-          if (isMissingRegEsp) {
-            addBlockTroquel(5, '[!] FALTA TIEMPO REGULADO ESPECIAL', job, `RMA: ${job.n} | MAQUINA: ${machine}`, 'block-error-data');
-          } else {
-            addBlockTroquel(tRegEsp, 'REGULADO ESPECIAL', job, 'Regulado Especial', 'block-troq-setup');
-          }
-        }
-
-        if (tProd > 0) {
-          addBlockTroquel(tProd, job.producto || 'Troquelado', job, `Tirajes: ${job.tirajes} | UN/TIRAJE: ${job.un_tiraje}`, 'block-c-prod', { isTroquelado: true });
-        }
-
-        // Actualizar trackers
-        const absFinish = (cursorDay * 1440) + cursorMin;
-        tracker.day = cursorDay;
-        tracker.min = cursorMin;
-        tracker.lastTroquel = job.n_troquel;
-        
-        // Bloqueo exclusivo: el troquel queda liberado SOLO después de fin de producción
-        if (tKey) {
-          troquelGlobalTracker[tKey] = absFinish;
-        }
-      }
-      
-      if (activeMenu !== 'etapa') {
-        selectMenu('etapa');
-      } else {
-        renderCronogramaPorEtapa();
-      }
-      showSaveToast("Cronograma calculado exitosamente");
-
-    } catch (err) {
-      console.error("Error generating cronograma:", err);
-      showSaveToast("Error al generar cronograma");
+    if (activeMenu !== 'etapa') {
+      selectMenu('etapa');
+    } else {
+      renderCronogramaPorEtapa();
     }
+    showSaveToast("Cronograma calculado exitosamente");
+
+  } catch (err) {
+    console.error("Error generating cronograma:", err);
+    showSaveToast("Error al generar cronograma");
   }
+}
 
 // ─────────────────────────────────────────────────────────────
 //  CRONOGRAMA POR ETAPA
@@ -1614,13 +750,13 @@ function renderCronogramaPorEtapa() {
         timeSet.add(Math.round(b.startMin + b.duration));
       });
     });
-    allTimeBoundaries.push(Array.from(timeSet).sort((a,b) => a - b));
+    allTimeBoundaries.push(Array.from(timeSet).sort((a, b) => a - b));
   });
 
   let dayHeights = allTimeBoundaries.map(bounds => (bounds.length - 1) * ROW_H);
   let dayOffsets = [0];
-  for(let i=0; i<dayHeights.length; i++) dayOffsets.push(dayOffsets[i] + dayHeights[i] + 10);
-  const totalGanttHeight = dayOffsets[dayOffsets.length-1];
+  for (let i = 0; i < dayHeights.length; i++) dayOffsets.push(dayOffsets[i] + dayHeights[i] + 10);
+  const totalGanttHeight = dayOffsets[dayOffsets.length - 1];
 
   // 2. PANELS CONSTRUCTION
   const cornerHTML = `<div class="gantt-corner">
@@ -1645,8 +781,8 @@ function renderCronogramaPorEtapa() {
     const bounds = allTimeBoundaries[di];
     const sIdx = bounds.indexOf(lStart), eIdx = bounds.indexOf(lEnd);
 
-    for(let r=0; r<bounds.length-1; r++) {
-      const b1 = bounds[r], b2 = bounds[r+1];
+    for (let r = 0; r < bounds.length - 1; r++) {
+      const b1 = bounds[r], b2 = bounds[r + 1];
       const isLunchArea = (schedState.lunchEnabled && r >= sIdx && r < eIdx && sIdx !== -1 && lStart !== lEnd);
       const isFirstLunchSlot = (r === sIdx);
 
@@ -1694,18 +830,18 @@ function renderCronogramaPorEtapa() {
 
           if (isProd) {
             const mat = String(blk.job?.material_requerido || '').toUpperCase();
-            const tj  = blk.job?.tirajes || '-';
+            const tj = blk.job?.tirajes || '-';
             const lines = [];
 
             if (isImpression) {
               const cur = blk.extraData?.currentCycle || 1;
               const tot = blk.extraData?.totalCycles || 1;
               const lin = blk.job?.linea || '';
-              const c2  = String(blk.job?.codigo_2 || '').trim();
-              
+              const c2 = String(blk.job?.codigo_2 || '').trim();
+
               // L1: RMA - PRODUCTO | CICLO (Mixed Bold/Normal)
               lines.push(`<div style="line-height:1.15; margin-bottom:0; text-align:left; font-size:11px;"><b style="text-transform:uppercase;">${escH(blk.job.n)} - ${escH(blk.job.producto)}</b> | ${cur}/${tot}</div>`);
-              
+
               // L4: TIME RANGE (Priority)
               if (h > 45) lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.85; line-height:1.15; margin-bottom:0; text-align:left;">${escH(timeStr)}</div>`);
 
@@ -1713,7 +849,7 @@ function renderCronogramaPorEtapa() {
               if (h > 65) {
                 let l2 = escH(mat);
                 if (h > 80 && lin) l2 += ` | ${escH(lin)}`;
-                if (h > 95 && c2)  l2 += ` | ${escH(c2)}`;
+                if (h > 95 && c2) l2 += ` | ${escH(c2)}`;
                 lines.push(`<div style="font-weight:normal; font-size:10px; opacity:0.9; line-height:1.15; margin-bottom:0; text-align:left;">${l2}</div>`);
               }
 
@@ -1776,8 +912,8 @@ function renderCronogramaPorEtapa() {
     </div>`;
 
   const b = document.getElementById('gantt-body-outer'), h = document.getElementById('gantt-header-outer'), s = document.getElementById('gantt-sidebar-outer');
-  if(b&&h&&s) b.onscroll = () => { h.scrollLeft = b.scrollLeft; s.scrollTop = b.scrollTop; };
-  
+  if (b && h && s) b.onscroll = () => { h.scrollLeft = b.scrollLeft; s.scrollTop = b.scrollTop; };
+
   wireDateBar('eta', exportCronogramaPorEtapa); wireFullscreenBtn();
   setupGanttConfigEvents();
   setTimeout(() => initResizable('etapa'), 60);
@@ -1786,7 +922,7 @@ function renderCronogramaPorEtapa() {
 function setupGanttConfigEvents() {
   const btnClose = document.getElementById('gantt-modal-close');
   if (btnClose) btnClose.onclick = closeGanttModal;
-  
+
   const overlay = document.getElementById('gantt-modal-overlay');
   if (overlay) overlay.onclick = (e) => { if (e.target.id === 'gantt-modal-overlay') closeGanttModal(); };
 }
@@ -1815,9 +951,9 @@ function showGanttModal(type) {
 
     const sIn = document.getElementById('cfg-lunch-start');
     const eIn = document.getElementById('cfg-lunch-end');
-    if(sIn && eIn) {
+    if (sIn && eIn) {
       sIn.onchange = () => {
-        if(!sIn.value) return;
+        if (!sIn.value) return;
         const m = t2m(sIn.value);
         eIn.value = mkTimeFromMins(m + 30);
       };
@@ -1959,21 +1095,21 @@ function getWorkSegments(startMins, durationMins, dayBreaks = []) {
     // 2. Find the next upcoming break
     let nextBreak = dayBreaks
       .filter(b => b.start > current)
-      .sort((a,b) => a.start - b.start)[0];
+      .sort((a, b) => a.start - b.start)[0];
 
     // 3. Calculate distance to next break or end of work (1080)
     let limit = nextBreak ? nextBreak.start : 1080;
     let available = limit - current;
 
     if (available <= 0) {
-       // Should not happen if boundaries are correct, but for safety:
-       current = limit; if (current >= 1080) break;
-       continue;
+      // Should not happen if boundaries are correct, but for safety:
+      current = limit; if (current >= 1080) break;
+      continue;
     }
 
     let chunk = Math.min(remaining, available);
     segments.push({ start: current, duration: chunk });
-    
+
     current += chunk;
     remaining -= chunk;
   }
@@ -1996,7 +1132,7 @@ function removeNightShift(idx) {
 function onCellClick(e) {
   const cell = e.currentTarget;
   const machine = cell.dataset.machine, di = +cell.dataset.day, si = +cell.dataset.slot;
-  
+
   if (!schedState.cells[machine]) {
     console.warn(`[onCellClick] Máquina ${machine} no inicializada en el estado.`);
     return;
@@ -2022,7 +1158,7 @@ function setupContextMenu() {
     // Detectar si el clic es en una fila de tabla (General o Planificación)
     const tr = e.target.closest('#table-body tr, #plan-table-body tr');
     if (!tr) return;
-    
+
     e.preventDefault();
     ctxTargetRow = tr;
     menu.style.top = e.clientY + 'px';
@@ -2043,7 +1179,7 @@ function setupContextMenu() {
         // Si la lista queda vacía, re-renderizar para mostrar estado vacío
         if (rmaSessionList.length === 0) {
           const container = document.getElementById('rma-list-container');
-          if (container) container.innerHTML = renderRMATable();
+          if (container) container.innerHTML = window.renderRMATable();
         }
       }
       ctxTargetRow = null;
@@ -2422,10 +1558,8 @@ function setupExportMenu() {
 }
 
 // UTILS
-function t2m(t) { if (!t) return 0; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
-function fmtDate() { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; }
+// t2m, fmtDate movidas a timeUtils.js. escH (redundante) movida a normalizers.js.
 function dlCsv(csv, name) { const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); const a = Object.assign(document.createElement('a'), { href: url, download: name }); document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
-function escH(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
 // ─────────────────────────────────────────────────────────────
 //  RESIZABLE COLUMNS & ROWS — SCHEDULE TABLES
@@ -2475,7 +1609,7 @@ function wireResizableGantt() {
       // Update the machine column in the body
       const bodyCol = document.querySelector(`.gantt-body-column[data-machine="${machine}"]`);
       if (bodyCol) bodyCol.style.width = newW + 'px';
-      
+
       // Update the stage header width (this might be complex if it spans multiple)
       // For now, the machine headers are updated by addColResizeHandle automatically.
     });
